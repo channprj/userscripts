@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Confluence Enhancer
-// @namespace    https://tampermonkey.net/
-// @version      1.0.0
-// @author       CHANN <chann@chann.dev>
 // @description  Hide Confluence Rovo, etc.
-// @match        https://*.atlassian.net/wiki/*
-// @match        https://*.atlassian.com/wiki/*
+// @namespace    https://github.com/channprj/userscripts/confluence
+// @version      1
+// @author       chann <chann@chann.dev>
+// @description  Hide Confluence Rovo, etc.
+// @include      https://*.atlassian.net/wiki/*
+// @include      https://*.atlassian.com/wiki/*
 // @run-at       document-end
 // @grant        GM_addStyle
 // ==/UserScript==
