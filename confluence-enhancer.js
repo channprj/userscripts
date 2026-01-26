@@ -1,12 +1,11 @@
 // ==UserScript==
 // @name         Confluence Enhancer
+// @namespace    https://github.com/channprj/userscripts
+// @version      2
+// @author       CHANN <chann@chann.dev>
 // @description  Hide Confluence Rovo, etc.
-// @namespace    https://github.com/channprj/userscripts/confluence
-// @version      1
-// @author       chann <chann@chann.dev>
-// @description  Hide Confluence Rovo, etc.
-// @include      https://*.atlassian.net/wiki/*
-// @include      https://*.atlassian.com/wiki/*
+// @match        https://*.atlassian.net/wiki/*
+// @match        https://*.atlassian.com/wiki/*
 // @run-at       document-end
 // @grant        GM_addStyle
 // ==/UserScript==
@@ -20,8 +19,8 @@
    * - hideRovoButton: 우측 액션바의 "Rovo Button" 자체도 숨기고 싶으면 true
    */
   const CONFIG = {
-    hideProactiveNudge: true,
-    hideRovoButton: false,
+    hideProactiveNudge: false,
+    hideRovoButton: true,
   };
 
   const SELECTORS = [];
@@ -31,7 +30,7 @@
   }
   if (CONFIG.hideRovoButton) {
     // 질문에 첨부된 Rovo 버튼
-    SELECTORS.push('button[data-testid="platform-ai-button"], [data-testid="platform-ai-button"]');
+    SELECTORS.push('button[data-testid="object-sidebar-container"], [data-testid="object-sidebar-container"]');
   }
 
   // GM_addStyle이 없을 때도 동작하도록 fallback 포함
