@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         iCloud Photos Copy Shortcut
 // @namespace    https://github.com/channprj/userscripts
-// @version      0.1
+// @version      0.2
 // @author       CHANN <chann@chann.dev>
-// @description  iCloud Photos 상세 화면에서 Cmd/Ctrl+C 로 현재 사진을 클립보드에 복사합니다.
+// @description  iCloud Photos 상세 화면 또는 그리드에서 선택된 사진을 Cmd/Ctrl+C 로 클립보드에 복사합니다.
 // @match        https://www.icloud.com/photos/*
 // @match        https://www.icloud.com/applications/photos3/*
 // @run-at       document-end
@@ -67,6 +67,38 @@
     return best;
   };
 
+  // 그리드 뷰에서 선택된 PhotoItemView 를 찾는다.
+  // iCloud 내부 view 객체(itemState.isSelected) 를 사용 — 앱 업데이트로 바뀔 수 있음.
+  const findSelectedGridItem = () => {
+    for (const el of document.querySelectorAll('.PhotoItemView')) {
+      const v = el.view;
+      if (v && v.itemState && v.itemState.isSelected) return el;
+    }
+    return null;
+  };
+
+  const loadCrossOriginImage = (url) =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('image load failed: ' + url));
+      img.src = url;
+    });
+
+  // PhotoItemView 의 _master.fields 에서 medium JPEG 의 downloadURL 을 얻는다.
+  // medium JPEG 는 iCloud detail 화면에서 표시되는 동일한 해상도이며 (예: 1536x2048)
+  // 원본 HEIC 는 브라우저 디코딩이 안 되므로 medium 을 사용한다.
+  const getMediumJpegUrl = (photoItemView) => {
+    const v = photoItemView.view;
+    const m = v && v._master && v._master.fields;
+    if (!m) return null;
+    const med = m.resJPEGMedRes;
+    if (!med || !med.downloadURL) return null;
+    const filename = m.filenameEnc_decoded || 'photo.jpg';
+    return med.downloadURL.replace('${f}', encodeURIComponent(filename));
+  };
+
   const copyImageToClipboard = async (img) => {
     const canvas = document.createElement('canvas');
     canvas.width = img.naturalWidth;
@@ -83,6 +115,31 @@
     ]);
   };
 
+  // 그리드 모드에서 클립보드 쓰기는 비동기 fetch+decode 가 필요해 user activation 이 만료될 수 있다.
+  // ClipboardItem 생성자에 Promise<Blob> 을 직접 넘기면 user activation 이 promise 동안 유지된다.
+  const copyGridSelection = async (photoItemView) => {
+    const url = getMediumJpegUrl(photoItemView);
+    if (!url) throw new Error('medium JPEG URL not available');
+
+    const pngBlobPromise = (async () => {
+      const img = await loadCrossOriginImage(url);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      return await new Promise((resolve, reject) => {
+        canvas.toBlob((b) => {
+          if (b) resolve(b);
+          else reject(new Error('canvas.toBlob() returned null'));
+        }, 'image/png');
+      });
+    })();
+
+    await navigator.clipboard.write([
+      new ClipboardItem({ 'image/png': pngBlobPromise }),
+    ]);
+  };
+
   const onKeyDown = (e) => {
     const isCopy =
       (e.metaKey || e.ctrlKey) &&
@@ -94,15 +151,27 @@
     if (isEditingTarget(e.target)) return;
     if (hasTextSelection()) return;
 
-    const img = findDetailImage();
-    if (!img) return;
+    // 1) 상세 화면 우선
+    const detailImg = findDetailImage();
+    if (detailImg) {
+      e.preventDefault();
+      e.stopPropagation();
+      copyImageToClipboard(detailImg).catch((err) => {
+        console.warn('[iCloud Photos Copy] detail copy failed:', err);
+      });
+      return;
+    }
 
-    e.preventDefault();
-    e.stopPropagation();
-
-    copyImageToClipboard(img).catch((err) => {
-      console.warn('[iCloud Photos Copy] failed:', err);
-    });
+    // 2) 그리드 뷰에서 선택된 사진
+    const grid = findSelectedGridItem();
+    if (grid) {
+      e.preventDefault();
+      e.stopPropagation();
+      copyGridSelection(grid).catch((err) => {
+        console.warn('[iCloud Photos Copy] grid copy failed:', err);
+      });
+      return;
+    }
   };
 
   // 캡처 단계에서 가로채 iCloud 기본 핸들러보다 먼저 처리

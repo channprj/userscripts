@@ -18,7 +18,7 @@
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
 | Google Search Navigator | Google 검색 결과를 Vim 스타일 단축키로 탐색합니다.              | 0.11 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
-| iCloud Photos Copy Shortcut | iCloud Photos 상세 화면에서 `Cmd/Ctrl+C` 로 현재 사진을 클립보드에 복사합니다. | 0.1 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
+| iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 
 
 ---
@@ -80,10 +80,10 @@ X(구 Twitter)의 한글 표시와 키보드 동작을 다듬습니다.
 
 [`icloud-photos-copy.user.js`](./icloud-photos-copy.user.js)
 
-iCloud Photos 웹에서 사진 상세를 본 뒤 우클릭 → **Copy Photos** 를 거치지 않고 `Cmd+C` / `Ctrl+C` 한 번으로 복사합니다.
+iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Photos** 를 거치지 않고 `Cmd+C` / `Ctrl+C` 한 번으로 복사합니다.
 
-- 상세 화면에 표시 중인 대형 이미지(뷰포트 중심에 가장 가까운 width ≥ 400px 이미지)를 자동으로 찾습니다.
-- 캔버스로 PNG 인코딩 후 `navigator.clipboard.write(new ClipboardItem(...))` 로 클립보드에 씁니다.
+- **상세 화면**: 뷰포트 중심에 가장 가까운 대형 이미지(width ≥ 400px, placeholder 제외)를 캔버스로 PNG 인코딩 후 클립보드에 씁니다.
+- **그리드 뷰**: 선택된 `PhotoItemView` 의 내부 view 객체에서 medium JPEG (1536×2048, 우클릭 Copy Photos 와 동일 해상도) 의 downloadURL 을 읽어, `crossOrigin='anonymous'` 로 로드 → 캔버스 → PNG → 클립보드에 씁니다. 원본 HEIC 는 브라우저가 디코딩할 수 없으므로 medium JPEG 가 iCloud 의 사실상 "원본 복사" 해상도입니다.
 - 텍스트가 선택되어 있거나 input/textarea/contentEditable 에 포커스가 있을 때는 가로채지 않고 기본 복사 동작을 그대로 둡니다.
 - iCloud Photos 는 `applications/photos3/*` iframe 안에서 동작하므로 두 URL 모두 매치합니다.
 
