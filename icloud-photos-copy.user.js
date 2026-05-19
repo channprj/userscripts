@@ -67,15 +67,9 @@
     return best;
   };
 
-  // 그리드 뷰에서 선택된 PhotoItemView 를 찾는다.
-  // iCloud 내부 view 객체(itemState.isSelected) 를 사용 — 앱 업데이트로 바뀔 수 있음.
-  const findSelectedGridItem = () => {
-    for (const el of document.querySelectorAll('.PhotoItemView')) {
-      const v = el.view;
-      if (v && v.itemState && v.itemState.isSelected) return el;
-    }
-    return null;
-  };
+  // 그리드 뷰에서 .is-selected 클래스가 붙은 PhotoItemView 를 찾는다.
+  const findSelectedGridItem = () =>
+    document.querySelector('.PhotoItemView.is-selected');
 
   const loadCrossOriginImage = (url) =>
     new Promise((resolve, reject) => {
