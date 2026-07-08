@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.13
+// @version      0.14
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -34,6 +34,16 @@
       behavior: "smooth",
       block: "center",
     },
+    searchTabs: [
+      { label: "AI Mode", mnemonic: "m", digit: "1" },
+      { label: "All", mnemonic: "a", digit: "2" },
+      { label: "Videos", mnemonic: "v", digit: "3" },
+      { label: "Images", mnemonic: "i", digit: "4" },
+      { label: "Short videos", mnemonic: "s", digit: "5" },
+      { label: "News", mnemonic: "n", digit: "6" },
+      { label: "Shopping", mnemonic: "b", digit: "7" },
+      { label: "Finance", mnemonic: "f", digit: "8" },
+    ],
   };
 
   function hasSearchParam(name, expectedValue) {
@@ -194,6 +204,33 @@
         x: rect.left + rect.width / 2,
         y: rect.top + rect.height / 2,
       };
+    },
+
+    normalizeText(text) {
+      return String(text || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+    },
+
+    getShortcutKey(event) {
+      if (event.key && event.key.length === 1) {
+        return event.key.toLowerCase();
+      }
+
+      if (/^Key[A-Z]$/.test(event.code)) {
+        return event.code.slice(3).toLowerCase();
+      }
+
+      if (/^Digit[0-9]$/.test(event.code)) {
+        return event.code.slice(5);
+      }
+
+      if (/^Numpad[0-9]$/.test(event.code)) {
+        return event.code.slice(6);
+      }
+
+      return "";
     },
 
     debounce(func, wait) {
@@ -501,6 +538,130 @@
     },
   };
 
+  const SearchTabHandler = {
+    pendingPrefix: false,
+
+    getTabForKey(key) {
+      return CONFIG.searchTabs.find(
+        (tab) => tab.mnemonic === key || tab.digit === key
+      );
+    },
+
+    getLinkText(link) {
+      return Utils.normalizeText(
+        link.textContent || link.getAttribute("aria-label")
+      );
+    },
+
+    findTabLink(tab) {
+      const expectedText = Utils.normalizeText(tab.label);
+      return Array.from(document.querySelectorAll("a")).find(
+        (link) => this.getLinkText(link) === expectedText
+      );
+    },
+
+    openTab(tab) {
+      const link = this.findTabLink(tab);
+      if (!link) return false;
+
+      link.click();
+      return true;
+    },
+
+    startPrefix() {
+      this.pendingPrefix = true;
+    },
+
+    cancelPrefix() {
+      this.pendingPrefix = false;
+    },
+
+    handlePrefixedKey(event) {
+      const key = Utils.getShortcutKey(event);
+      const tab = this.getTabForKey(key);
+      this.cancelPrefix();
+
+      if (!tab) return false;
+
+      event.preventDefault();
+      return this.openTab(tab);
+    },
+  };
+
+  const ShortcutHelpModal = {
+    modal: null,
+
+    getText() {
+      const tabRows = CONFIG.searchTabs
+        .map((tab) => `g ${tab.mnemonic} / g ${tab.digit}    ${tab.label}`)
+        .join("\n");
+
+      return [
+        "Google Search Navigator Shortcuts",
+        "",
+        "Results",
+        "J / Down    Next result or image below",
+        "K / Up      Previous result or image above",
+        "H / Left    Previous page or image left",
+        "L / Right   Next page or image right",
+        "Enter       Open or preview selected result",
+        "Cmd/Ctrl+Enter    Open selected result in a new tab",
+        "/           Focus search box",
+        "Esc         Close shortcuts or blur search box",
+        "",
+        "Search tabs",
+        tabRows,
+        "",
+        "?           Show shortcuts",
+      ].join("\n");
+    },
+
+    open() {
+      if (this.modal) return;
+
+      const modal = document.createElement("div");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-label", "Google Search Navigator shortcuts");
+      modal.setAttribute("data-gsn-shortcuts-modal", "true");
+      modal.style.cssText = [
+        "position:fixed",
+        "inset:24px",
+        "z-index:2147483647",
+        "box-sizing:border-box",
+        "max-width:560px",
+        "max-height:calc(100vh - 48px)",
+        "margin:auto",
+        "padding:20px",
+        "overflow:auto",
+        "white-space:pre-wrap",
+        "font:13px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+        "color:#202124",
+        "background:#fff",
+        "border:1px solid #dadce0",
+        "border-radius:8px",
+        "box-shadow:0 12px 36px rgba(0,0,0,.28)",
+      ].join(";");
+      modal.textContent = this.getText();
+
+      document.body.appendChild(modal);
+      this.modal = modal;
+    },
+
+    close() {
+      if (!this.modal) return;
+      this.modal.remove();
+      this.modal = null;
+    },
+
+    toggle() {
+      if (this.modal) {
+        this.close();
+      } else {
+        this.open();
+      }
+    },
+  };
+
   // Initialize navigation controller
   const navigation = new NavigationController();
 
@@ -508,6 +669,12 @@
   const KeyboardHandler = {
     handleEscapeKey(event) {
       event.preventDefault();
+      if (ShortcutHelpModal.modal) {
+        ShortcutHelpModal.close();
+        SearchTabHandler.cancelPrefix();
+        return;
+      }
+
       const contentWrapper = domCache.contentWrapper;
       if (contentWrapper) {
         contentWrapper.click();
@@ -534,6 +701,29 @@
       console.log("keydown:", keyCode);
 
       if (Utils.isTextElementFocused()) {
+        return;
+      }
+
+      if (SearchTabHandler.pendingPrefix) {
+        SearchTabHandler.handlePrefixedKey(event);
+        return;
+      }
+
+      if (keyCode === "Slash" && event.shiftKey) {
+        event.preventDefault();
+        SearchTabHandler.cancelPrefix();
+        ShortcutHelpModal.toggle();
+        return;
+      }
+
+      if (keyCode === "Escape") {
+        KeyboardHandler.handleEscapeKey(event);
+        return;
+      }
+
+      if (keyCode === "KeyG" && !event.metaKey && !event.ctrlKey) {
+        event.preventDefault();
+        SearchTabHandler.startPrefix();
         return;
       }
 

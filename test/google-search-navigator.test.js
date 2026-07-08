@@ -43,6 +43,7 @@ class FakeElement {
     this.style = { cssText: "" };
     this.classList = new FakeClassList(this);
     this.className = "";
+    this.textContent = options.textContent ?? "";
     this.offsetHeight = options.offsetHeight ?? 100;
     this.rect = options.rect ?? {
       left: 0,
@@ -70,6 +71,14 @@ class FakeElement {
       grandchild.ownerDocument = this.ownerDocument;
     }
     return child;
+  }
+
+  remove() {
+    if (!this.parentElement) return;
+    this.parentElement.children = this.parentElement.children.filter(
+      (child) => child !== this
+    );
+    this.parentElement = null;
   }
 
   get childElementCount() {
@@ -286,6 +295,13 @@ function createImageCard({ destination, previewHref, rect }) {
   return { card, anchor };
 }
 
+function createSearchTab(label, href = `/search?tbm=${label.toLowerCase()}`) {
+  return new FakeElement("a", {
+    attrs: { href, role: "link" },
+    textContent: label,
+  });
+}
+
 function loadNavigator({ url, bodyChildren }) {
   const document = new FakeDocument(url);
   document.append(...bodyChildren);
@@ -325,6 +341,8 @@ function loadNavigator({ url, bodyChildren }) {
       code,
       metaKey: Boolean(options.metaKey),
       ctrlKey: Boolean(options.ctrlKey),
+      shiftKey: Boolean(options.shiftKey),
+      key: options.key,
       defaultPrevented: false,
       preventDefault() {
         this.defaultPrevented = true;
@@ -476,4 +494,62 @@ test("Google Images Cmd/Ctrl+Enter opens the selected image result in a new tab"
     { url: "https://site.example/first", target: "_blank" },
   ]);
   assert.equal(first.anchor.clickCount, 0);
+});
+
+test("Google search tab shortcuts open tabs with g plus mnemonic or number", () => {
+  const tabs = {
+    aiMode: createSearchTab("AI Mode"),
+    all: createSearchTab("All"),
+    videos: createSearchTab("Videos"),
+    images: createSearchTab("Images"),
+    shortVideos: createSearchTab("Short videos"),
+    news: createSearchTab("News"),
+    shopping: createSearchTab("Shopping"),
+    finance: createSearchTab("Finance"),
+  };
+  const { dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=cat",
+    bodyChildren: Object.values(tabs),
+  });
+  const shortcuts = [
+    [tabs.aiMode, "KeyM", "Digit1"],
+    [tabs.all, "KeyA", "Digit2"],
+    [tabs.videos, "KeyV", "Digit3"],
+    [tabs.images, "KeyI", "Digit4"],
+    [tabs.shortVideos, "KeyS", "Digit5"],
+    [tabs.news, "KeyN", "Digit6"],
+    [tabs.shopping, "KeyB", "Digit7"],
+    [tabs.finance, "KeyF", "Digit8"],
+  ];
+
+  for (const [tab, mnemonicCode, digitCode] of shortcuts) {
+    dispatchKeydown("KeyG");
+    dispatchKeydown(mnemonicCode);
+
+    dispatchKeydown("KeyG");
+    dispatchKeydown(digitCode);
+
+    assert.equal(tab.clickCount, 2);
+  }
+});
+
+test("question mark opens a shortcuts modal that Escape closes", () => {
+  const { document, dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=cat",
+    bodyChildren: [],
+  });
+
+  const event = dispatchKeydown("Slash", { shiftKey: true, key: "?" });
+  const modal = document.querySelector('[role="dialog"]');
+
+  assert.equal(event.defaultPrevented, true);
+  assert.ok(modal);
+  assert.equal(modal.getAttribute("aria-label"), "Google Search Navigator shortcuts");
+  assert.match(modal.textContent, /g i \/ g 4\s+Images/);
+  assert.match(modal.textContent, /g s \/ g 5\s+Short videos/);
+  assert.match(modal.textContent, /\?\s+Show shortcuts/);
+
+  dispatchKeydown("Escape");
+
+  assert.equal(document.querySelector('[role="dialog"]'), null);
 });
