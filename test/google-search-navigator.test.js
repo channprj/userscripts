@@ -43,7 +43,7 @@ class FakeElement {
     this.style = { cssText: "" };
     this.classList = new FakeClassList(this);
     this.className = "";
-    this.textContent = options.textContent ?? "";
+    this._textContent = options.textContent ?? "";
     this.offsetHeight = options.offsetHeight ?? 100;
     this.rect = options.rect ?? {
       left: 0,
@@ -71,6 +71,17 @@ class FakeElement {
       grandchild.ownerDocument = this.ownerDocument;
     }
     return child;
+  }
+
+  get textContent() {
+    return [
+      this._textContent,
+      ...this.children.map((child) => child.textContent),
+    ].join("");
+  }
+
+  set textContent(value) {
+    this._textContent = String(value);
   }
 
   remove() {
@@ -533,7 +544,7 @@ test("Google search tab shortcuts open tabs with g plus mnemonic or number", () 
   }
 });
 
-test("question mark opens a shortcuts modal that Escape closes", () => {
+test("question mark opens a theme-aware shortcuts modal with kbd labels that Escape closes", () => {
   const { document, dispatchKeydown } = loadNavigator({
     url: "https://www.google.com/search?q=cat",
     bodyChildren: [],
@@ -545,9 +556,22 @@ test("question mark opens a shortcuts modal that Escape closes", () => {
   assert.equal(event.defaultPrevented, true);
   assert.ok(modal);
   assert.equal(modal.getAttribute("aria-label"), "Google Search Navigator shortcuts");
-  assert.match(modal.textContent, /g i \/ g 4\s+Images/);
-  assert.match(modal.textContent, /g s \/ g 5\s+Short videos/);
-  assert.match(modal.textContent, /\?\s+Show shortcuts/);
+
+  const style = document.querySelector("#google-search-navigator-style");
+  assert.match(style.textContent, /--gsn-modal-bg/);
+  assert.match(style.textContent, /prefers-color-scheme:\s*dark/);
+
+  const shortcutKeys = Array.from(modal.querySelectorAll("kbd")).map(
+    (key) => key.textContent
+  );
+  assert.ok(shortcutKeys.includes("J"));
+  assert.ok(shortcutKeys.includes("Down"));
+  assert.ok(shortcutKeys.includes("g i"));
+  assert.ok(shortcutKeys.includes("g 4"));
+  assert.ok(shortcutKeys.includes("?"));
+  assert.match(modal.textContent, /Google Search Navigator Shortcuts/);
+  assert.match(modal.textContent, /Images/);
+  assert.match(modal.textContent, /Short videos/);
 
   dispatchKeydown("Escape");
 

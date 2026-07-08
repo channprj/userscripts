@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.14
+// @version      0.15
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -70,20 +70,144 @@
 
   const StyleInstaller = {
     init() {
-      if (document.querySelector("#google-search-navigator-style")) {
-        return;
+      let style = document.querySelector("#google-search-navigator-style");
+      if (!style) {
+        style = document.createElement("style");
+        style.setAttribute("id", "google-search-navigator-style");
+        (document.head || document.body).appendChild(style);
       }
 
-      const style = document.createElement("style");
-      style.setAttribute("id", "google-search-navigator-style");
       style.textContent = `
         [data-gsn-image-selected="true"] {
           outline: 3px solid #d93025 !important;
           outline-offset: 2px !important;
           border-radius: 4px !important;
         }
+
+        [data-gsn-shortcuts-modal="true"] {
+          --gsn-modal-bg: #fff;
+          --gsn-modal-fg: #202124;
+          --gsn-modal-muted: #5f6368;
+          --gsn-modal-border: #dadce0;
+          --gsn-modal-shadow: rgba(60, 64, 67, .3);
+          --gsn-kbd-bg: #f8fafd;
+          --gsn-kbd-fg: #202124;
+          --gsn-kbd-border: #c7cdd7;
+          --gsn-kbd-shadow: rgba(60, 64, 67, .16);
+          position: fixed;
+          inset: 24px;
+          z-index: 2147483647;
+          box-sizing: border-box;
+          max-width: 640px;
+          max-height: calc(100vh - 48px);
+          margin: auto;
+          padding: 22px;
+          overflow: auto;
+          color: var(--gsn-modal-fg);
+          background: var(--gsn-modal-bg);
+          border: 1px solid var(--gsn-modal-border);
+          border-radius: 8px;
+          box-shadow: 0 16px 48px var(--gsn-modal-shadow);
+          color-scheme: light dark;
+          font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        @media (prefers-color-scheme: dark) {
+          [data-gsn-shortcuts-modal="true"] {
+            --gsn-modal-bg: #202124;
+            --gsn-modal-fg: #e8eaed;
+            --gsn-modal-muted: #bdc1c6;
+            --gsn-modal-border: #3c4043;
+            --gsn-modal-shadow: rgba(0, 0, 0, .46);
+            --gsn-kbd-bg: #303134;
+            --gsn-kbd-fg: #f1f3f4;
+            --gsn-kbd-border: #5f6368;
+            --gsn-kbd-shadow: rgba(0, 0, 0, .35);
+          }
+        }
+
+        [data-gsn-shortcuts-title="true"] {
+          margin: 0 0 16px;
+          color: var(--gsn-modal-fg);
+          font-size: 18px;
+          font-weight: 650;
+          line-height: 1.25;
+        }
+
+        [data-gsn-shortcuts-section="true"] + [data-gsn-shortcuts-section="true"] {
+          margin-top: 18px;
+          padding-top: 16px;
+          border-top: 1px solid var(--gsn-modal-border);
+        }
+
+        [data-gsn-shortcuts-section-title="true"] {
+          margin: 0 0 10px;
+          color: var(--gsn-modal-muted);
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0;
+          text-transform: uppercase;
+        }
+
+        [data-gsn-shortcut-row="true"] {
+          display: grid;
+          grid-template-columns: minmax(132px, max-content) minmax(0, 1fr);
+          gap: 14px;
+          align-items: center;
+          min-height: 30px;
+        }
+
+        [data-gsn-shortcut-row="true"] + [data-gsn-shortcut-row="true"] {
+          margin-top: 7px;
+        }
+
+        [data-gsn-shortcut-keys="true"] {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 5px;
+        }
+
+        [data-gsn-shortcut-label="true"] {
+          color: var(--gsn-modal-fg);
+          min-width: 0;
+        }
+
+        [data-gsn-shortcut-separator="true"] {
+          color: var(--gsn-modal-muted);
+          font-size: 12px;
+        }
+
+        [data-gsn-shortcuts-modal="true"] kbd {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 24px;
+          min-height: 24px;
+          box-sizing: border-box;
+          padding: 2px 7px;
+          color: var(--gsn-kbd-fg);
+          background: var(--gsn-kbd-bg);
+          border: 1px solid var(--gsn-kbd-border);
+          border-radius: 5px;
+          box-shadow: inset 0 -1px 0 var(--gsn-kbd-shadow);
+          font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        @media (max-width: 520px) {
+          [data-gsn-shortcuts-modal="true"] {
+            inset: 12px;
+            max-height: calc(100vh - 24px);
+            padding: 18px;
+          }
+
+          [data-gsn-shortcut-row="true"] {
+            grid-template-columns: 1fr;
+            gap: 6px;
+            align-items: start;
+          }
+        }
       `;
-      (document.head || document.body).appendChild(style);
     },
   };
 
@@ -591,29 +715,101 @@
   const ShortcutHelpModal = {
     modal: null,
 
-    getText() {
-      const tabRows = CONFIG.searchTabs
-        .map((tab) => `g ${tab.mnemonic} / g ${tab.digit}    ${tab.label}`)
-        .join("\n");
-
+    getSections() {
       return [
-        "Google Search Navigator Shortcuts",
-        "",
-        "Results",
-        "J / Down    Next result or image below",
-        "K / Up      Previous result or image above",
-        "H / Left    Previous page or image left",
-        "L / Right   Next page or image right",
-        "Enter       Open or preview selected result",
-        "Cmd/Ctrl+Enter    Open selected result in a new tab",
-        "/           Focus search box",
-        "Esc         Close shortcuts or blur search box",
-        "",
-        "Search tabs",
-        tabRows,
-        "",
-        "?           Show shortcuts",
-      ].join("\n");
+        {
+          title: "Results",
+          rows: [
+            { keys: ["J", "Down"], label: "Next result or image below" },
+            { keys: ["K", "Up"], label: "Previous result or image above" },
+            { keys: ["H", "Left"], label: "Previous page or image left" },
+            { keys: ["L", "Right"], label: "Next page or image right" },
+            { keys: ["Enter"], label: "Open or preview selected result" },
+            {
+              keys: ["Cmd/Ctrl+Enter"],
+              label: "Open selected result in a new tab",
+            },
+            { keys: ["/"], label: "Focus search box" },
+            { keys: ["Esc"], label: "Close shortcuts or blur search box" },
+          ],
+        },
+        {
+          title: "Search tabs",
+          rows: CONFIG.searchTabs.map((tab) => ({
+            keys: [`g ${tab.mnemonic}`, `g ${tab.digit}`],
+            label: tab.label,
+          })),
+        },
+        {
+          title: "Help",
+          rows: [{ keys: ["?"], label: "Show shortcuts" }],
+        },
+      ];
+    },
+
+    createElement(tagName, attributes = {}, text = "") {
+      const element = document.createElement(tagName);
+      Object.keys(attributes).forEach((name) => {
+        element.setAttribute(name, attributes[name]);
+      });
+      if (text) {
+        element.textContent = text;
+      }
+      return element;
+    },
+
+    createShortcutKeys(keys) {
+      const container = this.createElement("span", {
+        "data-gsn-shortcut-keys": "true",
+      });
+
+      keys.forEach((key, index) => {
+        if (index > 0) {
+          container.appendChild(
+            this.createElement(
+              "span",
+              { "data-gsn-shortcut-separator": "true" },
+              "/"
+            )
+          );
+        }
+
+        container.appendChild(this.createElement("kbd", {}, key));
+      });
+
+      return container;
+    },
+
+    createShortcutRow(row) {
+      const element = this.createElement("div", {
+        "data-gsn-shortcut-row": "true",
+      });
+      element.appendChild(this.createShortcutKeys(row.keys));
+      element.appendChild(
+        this.createElement(
+          "span",
+          { "data-gsn-shortcut-label": "true" },
+          row.label
+        )
+      );
+      return element;
+    },
+
+    createShortcutSection(section) {
+      const element = this.createElement("section", {
+        "data-gsn-shortcuts-section": "true",
+      });
+      element.appendChild(
+        this.createElement(
+          "h3",
+          { "data-gsn-shortcuts-section-title": "true" },
+          section.title
+        )
+      );
+      section.rows.forEach((row) => {
+        element.appendChild(this.createShortcutRow(row));
+      });
+      return element;
     },
 
     open() {
@@ -622,28 +818,22 @@
       const modal = document.createElement("div");
       modal.setAttribute("role", "dialog");
       modal.setAttribute("aria-label", "Google Search Navigator shortcuts");
+      modal.setAttribute("aria-modal", "true");
       modal.setAttribute("data-gsn-shortcuts-modal", "true");
-      modal.style.cssText = [
-        "position:fixed",
-        "inset:24px",
-        "z-index:2147483647",
-        "box-sizing:border-box",
-        "max-width:560px",
-        "max-height:calc(100vh - 48px)",
-        "margin:auto",
-        "padding:20px",
-        "overflow:auto",
-        "white-space:pre-wrap",
-        "font:13px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
-        "color:#202124",
-        "background:#fff",
-        "border:1px solid #dadce0",
-        "border-radius:8px",
-        "box-shadow:0 12px 36px rgba(0,0,0,.28)",
-      ].join(";");
-      modal.textContent = this.getText();
+      modal.setAttribute("tabindex", "-1");
+      modal.appendChild(
+        this.createElement(
+          "h2",
+          { "data-gsn-shortcuts-title": "true" },
+          "Google Search Navigator Shortcuts"
+        )
+      );
+      this.getSections().forEach((section) => {
+        modal.appendChild(this.createShortcutSection(section));
+      });
 
       document.body.appendChild(modal);
+      modal.focus();
       this.modal = modal;
     },
 
