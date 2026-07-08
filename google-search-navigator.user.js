@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.11
+// @version      0.12
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -23,6 +23,8 @@
     selectors: {
       resultElements: ".MjjYud",
       nestedResultElements: ".A6K0A",
+      imageResultElements: ".isv-r, [data-lpage]",
+      imagePreviewLink: "a[href*='/imgres'], a[href*='imgurl='], a",
       searchInput: "div textarea",
       contentWrapper: "#rcnt",
       nextButton: "#pnnext",
@@ -34,6 +36,47 @@
     },
   };
 
+  function hasSearchParam(name, expectedValue) {
+    const search =
+      (window.location && window.location.search) ||
+      (document.location && document.location.search) ||
+      "";
+    return search
+      .replace(/^\?/, "")
+      .split("&")
+      .filter(Boolean)
+      .some((pair) => {
+        const [rawName, rawValue = ""] = pair.split("=");
+        return (
+          decodeURIComponent(rawName.replace(/\+/g, " ")) === name &&
+          decodeURIComponent(rawValue.replace(/\+/g, " ")) === expectedValue
+        );
+      });
+  }
+
+  function isImageSearchPage() {
+    return hasSearchParam("tbm", "isch") || hasSearchParam("udm", "2");
+  }
+
+  const StyleInstaller = {
+    init() {
+      if (document.querySelector("#google-search-navigator-style")) {
+        return;
+      }
+
+      const style = document.createElement("style");
+      style.setAttribute("id", "google-search-navigator-style");
+      style.textContent = `
+        [data-gsn-image-selected="true"] {
+          outline: 3px solid #d93025 !important;
+          outline-offset: 2px !important;
+          border-radius: 4px !important;
+        }
+      `;
+      (document.head || document.body).appendChild(style);
+    },
+  };
+
   // DOM Elements Cache
   class DOMCache {
     constructor() {
@@ -41,16 +84,24 @@
     }
 
     refresh() {
-      this._resultElements = document.querySelectorAll(
-        CONFIG.selectors.resultElements
-      );
-      const nestedElements = document.querySelectorAll(
-        CONFIG.selectors.nestedResultElements
-      );
+      this._isImageSearch = isImageSearchPage();
 
-      // Use nested elements if available (for specialized search results)
-      if (nestedElements.length > 0) {
-        this._resultElements = nestedElements;
+      if (this._isImageSearch) {
+        this._resultElements = document.querySelectorAll(
+          CONFIG.selectors.imageResultElements
+        );
+      } else {
+        this._resultElements = document.querySelectorAll(
+          CONFIG.selectors.resultElements
+        );
+        const nestedElements = document.querySelectorAll(
+          CONFIG.selectors.nestedResultElements
+        );
+
+        // Use nested elements if available (for specialized search results)
+        if (nestedElements.length > 0) {
+          this._resultElements = nestedElements;
+        }
       }
 
       this._searchInput = document.querySelector(CONFIG.selectors.searchInput);
@@ -69,6 +120,10 @@
 
     get contentWrapper() {
       return this._contentWrapper;
+    }
+
+    get isImageSearch() {
+      return this._isImageSearch;
     }
   }
 
@@ -107,6 +162,33 @@
       return node && node.childElementCount > 0 && node.offsetHeight > 0;
     },
 
+    getImagePreviewLink(element) {
+      return (
+        element.querySelector(CONFIG.selectors.imagePreviewLink) ||
+        element.getElementsByTagName("a")[0]
+      );
+    },
+
+    getImageDestination(element) {
+      const dataDestination =
+        element.getAttribute("data-lpage") ||
+        (element.dataset && element.dataset.lpage);
+      if (dataDestination) return dataDestination;
+
+      const link = this.getImagePreviewLink(element);
+      if (!link) return null;
+
+      const href = link.href || link.getAttribute("href");
+      if (!href) return null;
+
+      try {
+        const url = new URL(href, window.location.href);
+        return url.searchParams.get("imgrefurl") || url.href;
+      } catch (error) {
+        return href;
+      }
+    },
+
     debounce(func, wait) {
       let timeout;
       return function executedFunction(...args) {
@@ -124,10 +206,12 @@
   class NavigationController {
     constructor() {
       this.focusIndex = 0;
+      this.previewedImageIndex = null;
       this.initialize();
     }
 
     initialize() {
+      this.previewedImageIndex = null;
       this.focusIndex = this.initializeFirstResult();
     }
 
@@ -163,15 +247,60 @@
         index < elements.length &&
         Utils.isValidResultNode(elements[index])
       ) {
-        elements[index].style.cssText = CONFIG.styles.selectedLink;
-        elements[index].scrollIntoView(CONFIG.scrollBehavior);
+        const element = elements[index];
+        element.setAttribute("data-gsn-selected", "true");
+
+        if (domCache.isImageSearch) {
+          element.setAttribute("data-gsn-image-selected", "true");
+          element.setAttribute("tabindex", "-1");
+          element.focus();
+        } else {
+          element.style.cssText = CONFIG.styles.selectedLink;
+        }
+
+        element.scrollIntoView(CONFIG.scrollBehavior);
       }
     }
 
     clearHighlight(index) {
       const elements = domCache.resultElements;
       if (index >= 0 && index < elements.length) {
-        elements[index].style.cssText = CONFIG.styles.normal;
+        const element = elements[index];
+        element.removeAttribute("data-gsn-selected");
+        element.removeAttribute("data-gsn-image-selected");
+
+        if (!domCache.isImageSearch) {
+          element.style.cssText = CONFIG.styles.normal;
+        }
+      }
+    }
+
+    openImageItem(index, openInNewTab = false) {
+      const elements = domCache.resultElements;
+      const element = elements[index];
+      const destination = Utils.getImageDestination(element);
+
+      if (openInNewTab) {
+        if (destination) {
+          window.open(destination, "_blank");
+        }
+        return;
+      }
+
+      if (this.previewedImageIndex === index && destination) {
+        window.location.href = destination;
+        return;
+      }
+
+      const previewLink = Utils.getImagePreviewLink(element);
+      if (previewLink) {
+        previewLink.click();
+        this.previewedImageIndex = index;
+        return;
+      }
+
+      if (destination) {
+        window.location.href = destination;
       }
     }
 
@@ -182,6 +311,11 @@
         index < elements.length &&
         Utils.isValidResultNode(elements[index])
       ) {
+        if (domCache.isImageSearch) {
+          this.openImageItem(index, openInNewTab);
+          return;
+        }
+
         const selectedLink = elements[index].getElementsByTagName("a")[0];
         if (selectedLink) {
           if (openInNewTab) {
@@ -216,13 +350,21 @@
 
     navigateNext() {
       this.clearHighlight(this.focusIndex);
-      this.focusIndex = this.findNextValidIndex(this.focusIndex);
+      const nextIndex = this.findNextValidIndex(this.focusIndex);
+      if (nextIndex !== this.focusIndex) {
+        this.previewedImageIndex = null;
+      }
+      this.focusIndex = nextIndex;
       this.setHighlight(this.focusIndex);
     }
 
     navigatePrev() {
       this.clearHighlight(this.focusIndex);
-      this.focusIndex = this.findPrevValidIndex(this.focusIndex);
+      const prevIndex = this.findPrevValidIndex(this.focusIndex);
+      if (prevIndex !== this.focusIndex) {
+        this.previewedImageIndex = null;
+      }
+      this.focusIndex = prevIndex;
       this.setHighlight(this.focusIndex);
     }
 
@@ -345,12 +487,20 @@
           return;
         }
         event.preventDefault();
+        if (domCache.isImageSearch) {
+          navigation.navigateNext();
+          return;
+        }
         PaginationHandler.handlePagination("next");
         return;
       }
 
       if (keyCode === "KeyH" || keyCode === "ArrowLeft") {
         event.preventDefault();
+        if (domCache.isImageSearch) {
+          navigation.navigatePrev();
+          return;
+        }
         PaginationHandler.handlePagination("prev");
         return;
       }
@@ -377,9 +527,11 @@
               (node) =>
                 node.nodeType === Node.ELEMENT_NODE &&
                 ((node.matches &&
-                  node.matches(CONFIG.selectors.resultElements)) ||
+                  (node.matches(CONFIG.selectors.resultElements) ||
+                    node.matches(CONFIG.selectors.imageResultElements))) ||
                   (node.querySelector &&
-                    node.querySelector(CONFIG.selectors.resultElements)))
+                    (node.querySelector(CONFIG.selectors.resultElements) ||
+                      node.querySelector(CONFIG.selectors.imageResultElements))))
             )
           );
 
@@ -416,6 +568,7 @@
   // Initialize the application
   const init = () => {
     try {
+      StyleInstaller.init();
       DOMObserver.init();
       setupEventListeners();
 
@@ -432,4 +585,3 @@
     init();
   }
 })();
-
