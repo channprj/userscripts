@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.12
+// @version      0.13
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -189,6 +189,13 @@
       }
     },
 
+    getRectCenter(rect) {
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    },
+
     debounce(func, wait) {
       let timeout;
       return function executedFunction(...args) {
@@ -238,6 +245,73 @@
       }
 
       return prevIndex >= 0 ? prevIndex : currentIndex;
+    }
+
+    findDirectionalImageIndex(currentIndex, direction) {
+      const elements = Array.from(domCache.resultElements);
+      const currentElement = elements[currentIndex];
+      if (!Utils.isValidResultNode(currentElement)) {
+        return currentIndex;
+      }
+
+      const currentRect = currentElement.getBoundingClientRect();
+      const currentCenter = Utils.getRectCenter(currentRect);
+      let bestMatch = null;
+
+      elements.forEach((element, index) => {
+        if (index === currentIndex || !Utils.isValidResultNode(element)) {
+          return;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const center = Utils.getRectCenter(rect);
+        const dx = center.x - currentCenter.x;
+        const dy = center.y - currentCenter.y;
+        let primaryDistance;
+        let crossAxisDistance;
+
+        if (direction === "right") {
+          if (dx <= 0) return;
+          primaryDistance = dx;
+          crossAxisDistance = Math.abs(dy);
+        } else if (direction === "left") {
+          if (dx >= 0) return;
+          primaryDistance = Math.abs(dx);
+          crossAxisDistance = Math.abs(dy);
+        } else if (direction === "down") {
+          if (dy <= 0) return;
+          primaryDistance = dy;
+          crossAxisDistance = Math.abs(dx);
+        } else if (direction === "up") {
+          if (dy >= 0) return;
+          primaryDistance = Math.abs(dy);
+          crossAxisDistance = Math.abs(dx);
+        } else {
+          return;
+        }
+
+        const score = crossAxisDistance * 2 + primaryDistance;
+        const candidate = {
+          index,
+          score,
+          primaryDistance,
+          domDistance: Math.abs(index - currentIndex),
+        };
+
+        if (
+          !bestMatch ||
+          candidate.score < bestMatch.score ||
+          (candidate.score === bestMatch.score &&
+            candidate.primaryDistance < bestMatch.primaryDistance) ||
+          (candidate.score === bestMatch.score &&
+            candidate.primaryDistance === bestMatch.primaryDistance &&
+            candidate.domDistance < bestMatch.domDistance)
+        ) {
+          bestMatch = candidate;
+        }
+      });
+
+      return bestMatch ? bestMatch.index : currentIndex;
     }
 
     setHighlight(index) {
@@ -368,6 +442,19 @@
       this.setHighlight(this.focusIndex);
     }
 
+    navigateImageDirection(direction) {
+      this.clearHighlight(this.focusIndex);
+      const nextIndex = this.findDirectionalImageIndex(
+        this.focusIndex,
+        direction
+      );
+      if (nextIndex !== this.focusIndex) {
+        this.previewedImageIndex = null;
+      }
+      this.focusIndex = nextIndex;
+      this.setHighlight(this.focusIndex);
+    }
+
     openItem(openInNewTab = false) {
       this.clickItem(this.focusIndex, openInNewTab);
     }
@@ -453,12 +540,20 @@
       // Navigation keys
       if (keyCode === "KeyJ" || keyCode === "ArrowDown") {
         event.preventDefault();
+        if (domCache.isImageSearch) {
+          navigation.navigateImageDirection("down");
+          return;
+        }
         navigation.navigateNext();
         return;
       }
 
       if (keyCode === "KeyK" || keyCode === "ArrowUp") {
         event.preventDefault();
+        if (domCache.isImageSearch) {
+          navigation.navigateImageDirection("up");
+          return;
+        }
         navigation.navigatePrev();
         return;
       }
@@ -488,7 +583,7 @@
         }
         event.preventDefault();
         if (domCache.isImageSearch) {
-          navigation.navigateNext();
+          navigation.navigateImageDirection("right");
           return;
         }
         PaginationHandler.handlePagination("next");
@@ -498,7 +593,7 @@
       if (keyCode === "KeyH" || keyCode === "ArrowLeft") {
         event.preventDefault();
         if (domCache.isImageSearch) {
-          navigation.navigatePrev();
+          navigation.navigateImageDirection("left");
           return;
         }
         PaginationHandler.handlePagination("prev");

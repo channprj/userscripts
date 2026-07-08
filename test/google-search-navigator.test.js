@@ -44,6 +44,12 @@ class FakeElement {
     this.classList = new FakeClassList(this);
     this.className = "";
     this.offsetHeight = options.offsetHeight ?? 100;
+    this.rect = options.rect ?? {
+      left: 0,
+      top: 0,
+      width: 100,
+      height: this.offsetHeight,
+    };
     this.clickCount = 0;
     this.scrollIntoViewCount = 0;
 
@@ -111,6 +117,14 @@ class FakeElement {
 
   scrollIntoView() {
     this.scrollIntoViewCount += 1;
+  }
+
+  getBoundingClientRect() {
+    return {
+      ...this.rect,
+      right: this.rect.left + this.rect.width,
+      bottom: this.rect.top + this.rect.height,
+    };
   }
 
   getElementsByTagName(tagName) {
@@ -255,10 +269,11 @@ function matchesSelector(element, selector) {
   return true;
 }
 
-function createImageCard({ destination, previewHref }) {
+function createImageCard({ destination, previewHref, rect }) {
   const card = new FakeElement("div", {
     attrs: { "data-lpage": destination },
     classes: ["isv-r"],
+    rect,
   });
   const anchor = new FakeElement("a", {
     attrs: { href: previewHref },
@@ -325,11 +340,13 @@ function loadNavigator({ url, bodyChildren }) {
 test("Google Images navigation highlights and focuses image cards with arrows and hjkl", () => {
   const first = createImageCard({
     destination: "https://site.example/first",
+    rect: { left: 0, top: 0, width: 100, height: 100 },
     previewHref:
       "/imgres?imgurl=https%3A%2F%2Fimg.example%2Ffirst.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Ffirst",
   });
   const second = createImageCard({
     destination: "https://site.example/second",
+    rect: { left: 120, top: 0, width: 100, height: 100 },
     previewHref:
       "/imgres?imgurl=https%3A%2F%2Fimg.example%2Fsecond.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Fsecond",
   });
@@ -356,6 +373,69 @@ test("Google Images navigation highlights and focuses image cards with arrows an
   dispatchKeydown("KeyL");
 
   assert.equal(document.activeElement, second.card);
+});
+
+test("Google Images directional navigation follows visual masonry neighbors", () => {
+  const topLeft = createImageCard({
+    destination: "https://site.example/top-left",
+    rect: { left: 0, top: 0, width: 100, height: 120 },
+    previewHref:
+      "/imgres?imgurl=https%3A%2F%2Fimg.example%2Ftop-left.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Ftop-left",
+  });
+  const topMiddle = createImageCard({
+    destination: "https://site.example/top-middle",
+    rect: { left: 120, top: 0, width: 100, height: 90 },
+    previewHref:
+      "/imgres?imgurl=https%3A%2F%2Fimg.example%2Ftop-middle.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Ftop-middle",
+  });
+  const topRight = createImageCard({
+    destination: "https://site.example/top-right",
+    rect: { left: 240, top: 0, width: 100, height: 150 },
+    previewHref:
+      "/imgres?imgurl=https%3A%2F%2Fimg.example%2Ftop-right.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Ftop-right",
+  });
+  const lowerLeft = createImageCard({
+    destination: "https://site.example/lower-left",
+    rect: { left: 0, top: 140, width: 100, height: 100 },
+    previewHref:
+      "/imgres?imgurl=https%3A%2F%2Fimg.example%2Flower-left.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Flower-left",
+  });
+  const lowerMiddle = createImageCard({
+    destination: "https://site.example/lower-middle",
+    rect: { left: 120, top: 110, width: 100, height: 100 },
+    previewHref:
+      "/imgres?imgurl=https%3A%2F%2Fimg.example%2Flower-middle.jpg&imgrefurl=https%3A%2F%2Fsite.example%2Flower-middle",
+  });
+  const { document, dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=cat&udm=2",
+    bodyChildren: [
+      topLeft.card,
+      topMiddle.card,
+      topRight.card,
+      lowerLeft.card,
+      lowerMiddle.card,
+    ],
+  });
+
+  dispatchKeydown("ArrowDown");
+
+  assert.equal(document.activeElement, lowerLeft.card);
+
+  dispatchKeydown("ArrowRight");
+
+  assert.equal(document.activeElement, lowerMiddle.card);
+
+  dispatchKeydown("KeyK");
+
+  assert.equal(document.activeElement, topMiddle.card);
+
+  dispatchKeydown("KeyL");
+
+  assert.equal(document.activeElement, topRight.card);
+
+  dispatchKeydown("KeyH");
+
+  assert.equal(document.activeElement, topMiddle.card);
 });
 
 test("Google Images Enter previews first, then navigates to the selected image result", () => {
