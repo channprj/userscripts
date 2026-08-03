@@ -313,6 +313,12 @@ function createSearchTab(label, href = `/search?tbm=${label.toLowerCase()}`) {
   });
 }
 
+function createVideoResult(title, href) {
+  const link = new FakeElement("a", { attrs: { href } });
+  link.appendChild(new FakeElement("h3", { textContent: title }));
+  return link;
+}
+
 function loadNavigator({ url, bodyChildren }) {
   const document = new FakeDocument(url);
   document.append(...bodyChildren);
@@ -505,6 +511,71 @@ test("Google Images Cmd/Ctrl+Enter opens the selected image result in a new tab"
     { url: "https://site.example/first", target: "_blank" },
   ]);
   assert.equal(first.anchor.clickCount, 0);
+});
+
+test("Google Videos navigation uses semantic result links when result classes differ", () => {
+  const first = createVideoResult(
+    "First video",
+    "https://video.example/first"
+  );
+  const second = createVideoResult(
+    "Second video",
+    "https://video.example/second"
+  );
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(first);
+  search.appendChild(second);
+  const prevButton = new FakeElement("a", { attrs: { id: "pnprev" } });
+  const nextButton = new FakeElement("a", { attrs: { id: "pnnext" } });
+  const { dispatchKeydown, openedUrls } = loadNavigator({
+    url: "https://www.google.com/search?q=video&udm=7",
+    bodyChildren: [search, prevButton, nextButton],
+  });
+
+  assert.equal(first.style.cssText.includes("border-left:4px solid red"), true);
+
+  dispatchKeydown("KeyJ");
+  assert.equal(first.style.cssText, "");
+  assert.equal(second.style.cssText.includes("border-left:4px solid red"), true);
+
+  dispatchKeydown("KeyK");
+  assert.equal(first.style.cssText.includes("border-left:4px solid red"), true);
+
+  dispatchKeydown("ArrowDown");
+  dispatchKeydown("ArrowUp");
+  assert.equal(first.style.cssText.includes("border-left:4px solid red"), true);
+
+  dispatchKeydown("ArrowDown");
+  dispatchKeydown("Enter");
+  assert.equal(second.clickCount, 1);
+
+  dispatchKeydown("Enter", { metaKey: true });
+  assert.deepEqual(openedUrls, [
+    { url: "https://video.example/second", target: "_blank" },
+  ]);
+
+  dispatchKeydown("KeyH");
+  dispatchKeydown("ArrowLeft");
+  dispatchKeydown("KeyL");
+  dispatchKeydown("ArrowRight");
+  assert.equal(prevButton.clickCount, 2);
+  assert.equal(nextButton.clickCount, 2);
+});
+
+test("Google Videos recognizes legacy tbm video search URLs", () => {
+  const result = createVideoResult(
+    "Legacy video result",
+    "https://video.example/legacy"
+  );
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(result);
+
+  loadNavigator({
+    url: "https://www.google.com/search?q=video&tbm=vid",
+    bodyChildren: [search],
+  });
+
+  assert.equal(result.style.cssText.includes("border-left:4px solid red"), true);
 });
 
 test("Google search tab shortcuts open tabs with g plus mnemonic or number", () => {

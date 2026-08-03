@@ -16,7 +16,7 @@
 | 이름                      | 설명                                             | 버전   | Install                                                                                                |
 | ----------------------- | ---------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
-| Google Search Navigator | Google 검색 결과와 이미지 탭을 Vim 스타일 단축키로 탐색합니다.              | 0.15 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
+| Google Search Navigator | Google 검색 결과와 이미지·동영상 탭을 Vim 스타일 단축키로 탐색합니다.          | 0.16 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 
@@ -43,7 +43,7 @@ Atlassian Confluence 페이지에서 시야를 가리는 요소들을 정리합�
 
 `[google-search-navigator.user.js](./google-search-navigator.user.js)`
 
-Google 검색 결과와 이미지 탭을 키보드만으로 빠르게 탐색합니다.
+Google 검색 결과와 이미지·동영상 탭을 키보드만으로 빠르게 탐색합니다.
 
 
 | 키                  | 동작              |

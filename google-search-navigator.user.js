@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.15
+// @version      0.16
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -25,6 +25,7 @@
       nestedResultElements: ".A6K0A",
       imageResultElements: ".isv-r, [data-lpage]",
       imagePreviewLink: "a[href*='/imgres'], a[href*='imgurl='], a",
+      videoResultHeadings: "#search a[href] h3",
       searchInput: "div textarea",
       contentWrapper: "#rcnt",
       nextButton: "#pnnext",
@@ -66,6 +67,10 @@
 
   function isImageSearchPage() {
     return hasSearchParam("tbm", "isch") || hasSearchParam("udm", "2");
+  }
+
+  function isVideoSearchPage() {
+    return hasSearchParam("tbm", "vid") || hasSearchParam("udm", "7");
   }
 
   const StyleInstaller = {
@@ -219,11 +224,20 @@
 
     refresh() {
       this._isImageSearch = isImageSearchPage();
+      const isVideoSearch = isVideoSearchPage();
 
       if (this._isImageSearch) {
         this._resultElements = document.querySelectorAll(
           CONFIG.selectors.imageResultElements
         );
+      } else if (isVideoSearch) {
+        this._resultElements = Array.from(
+          document.querySelectorAll(CONFIG.selectors.videoResultHeadings)
+        )
+          .map((heading) => heading.closest("a"))
+          .filter(
+            (link, index, links) => link && links.indexOf(link) === index
+          );
       } else {
         this._resultElements = document.querySelectorAll(
           CONFIG.selectors.resultElements
@@ -321,6 +335,12 @@
       } catch (error) {
         return href;
       }
+    },
+
+    getResultLink(element) {
+      if (!element) return null;
+      if (element.matches && element.matches("a[href]")) return element;
+      return element.getElementsByTagName("a")[0] || null;
     },
 
     getRectCenter(rect) {
@@ -551,7 +571,7 @@
           return;
         }
 
-        const selectedLink = elements[index].getElementsByTagName("a")[0];
+        const selectedLink = Utils.getResultLink(elements[index]);
         if (selectedLink) {
           if (openInNewTab) {
             // Open in new background tab
@@ -1003,10 +1023,12 @@
                 node.nodeType === Node.ELEMENT_NODE &&
                 ((node.matches &&
                   (node.matches(CONFIG.selectors.resultElements) ||
-                    node.matches(CONFIG.selectors.imageResultElements))) ||
+                    node.matches(CONFIG.selectors.imageResultElements) ||
+                    node.matches(CONFIG.selectors.videoResultHeadings))) ||
                   (node.querySelector &&
                     (node.querySelector(CONFIG.selectors.resultElements) ||
-                      node.querySelector(CONFIG.selectors.imageResultElements))))
+                      node.querySelector(CONFIG.selectors.imageResultElements) ||
+                      node.querySelector(CONFIG.selectors.videoResultHeadings))))
             )
           );
 
