@@ -747,6 +747,50 @@ test("Google News navigates semantic heading cards and opens the selected story"
   ]);
 });
 
+test("Google News supports result pages where #rso is the only search root", () => {
+  const story = createRichResult({
+    title: "News story under rso",
+    href: "https://news.example/rso-story",
+    rect: { left: 0, top: 0, width: 640, height: 160 },
+  });
+  const rso = new FakeElement("div", { attrs: { id: "rso" } });
+  rso.appendChild(story.card);
+
+  const { dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=latest&udm=12",
+    bodyChildren: [rso],
+  });
+
+  assert.equal(story.card.getAttribute("data-gsn-selected"), "true");
+  dispatchKeydown("Enter");
+  assert.equal(story.link.clickCount, 1);
+});
+
+test("Google News supports legacy g-card links without heading markup", () => {
+  const card = new FakeElement("g-card", {
+    rect: { left: 0, top: 0, width: 640, height: 160 },
+  });
+  const link = new FakeElement("a", {
+    attrs: { href: "https://news.example/card-story" },
+    rect: { left: 0, top: 0, width: 640, height: 160 },
+  });
+  link.appendChild(
+    new FakeElement("span", { textContent: "News story without heading" })
+  );
+  card.appendChild(link);
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(card);
+
+  const { dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=latest&tbm=nws",
+    bodyChildren: [search],
+  });
+
+  assert.equal(card.getAttribute("data-gsn-selected"), "true");
+  dispatchKeydown("Enter");
+  assert.equal(link.clickCount, 1);
+});
+
 test("Google Shopping navigates product cards without heading tags", () => {
   const first = createRichResult({
     title: "First shoes",
@@ -776,6 +820,46 @@ test("Google Shopping navigates product cards without heading tags", () => {
   assert.equal(first.card.getAttribute("data-gsn-selected"), "true");
   dispatchKeydown("KeyJ");
   assert.equal(second.card.getAttribute("data-gsn-selected"), "true");
+  dispatchKeydown("Enter");
+  assert.equal(second.link.clickCount, 1);
+});
+
+test("Google Shopping supports product cards whose only title marker is h4", () => {
+  const createProduct = (title, href, top) => {
+    const card = new FakeElement("div", {
+      classes: ["sh-dgr__content"],
+      rect: { left: 0, top, width: 640, height: 180 },
+    });
+    const link = new FakeElement("a", {
+      attrs: { href },
+      rect: { left: 0, top, width: 640, height: 180 },
+    });
+    link.appendChild(new FakeElement("h4", { textContent: title }));
+    card.appendChild(link);
+    return { card, link };
+  };
+
+  const first = createProduct(
+    "First legacy product",
+    "https://shop.example/legacy-first",
+    0
+  );
+  const second = createProduct(
+    "Second legacy product",
+    "https://shop.example/legacy-second",
+    200
+  );
+  const rso = new FakeElement("div", { attrs: { id: "rso" } });
+  rso.appendChild(first.card);
+  rso.appendChild(second.card);
+
+  const { dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=shoes&tbm=shop",
+    bodyChildren: [rso],
+  });
+
+  assert.equal(first.card.getAttribute("data-gsn-selected"), "true");
+  dispatchKeydown("KeyJ");
   dispatchKeydown("Enter");
   assert.equal(second.link.clickCount, 1);
 });

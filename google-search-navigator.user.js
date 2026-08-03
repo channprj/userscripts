@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.17
+// @version      0.18
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -20,9 +20,9 @@
       nestedResultElements: ".A6K0A",
       imageResultElements: ".isv-r, [data-lpage]",
       imagePreviewLink: "a[href*='/imgres'], a[href*='imgurl='], a",
-      searchRoot: "#search",
+      searchRoot: "#rso, #search",
       semanticResultNodes:
-        "#search h3, #search [role='heading'], #search a[href][aria-label], #search a[href] img",
+        "h3, [role='heading'], a[href][aria-label], a[href] img",
       searchInput: "div textarea",
       contentWrapper: "#rcnt",
       nextButton: "#pnnext",
@@ -140,10 +140,18 @@
       });
   }
 
-  function getSemanticResultLinks(searchMode) {
-    const headingNodes = document.querySelectorAll(
-      "#search h3, #search [role='heading']"
-    );
+  function getSearchRoot() {
+    return document.querySelector("#rso") || document.querySelector("#search");
+  }
+
+  function getSemanticResultLinks(searchMode, searchRoot) {
+    let headingSelector = "h3, [role='heading']";
+    if (searchMode === SEARCH_MODES.SHOPPING) {
+      headingSelector = "h3, h4, [role='heading']";
+    } else if (searchMode === SEARCH_MODES.NEWS) {
+      headingSelector = "h3, [role='heading'], g-card a[href]";
+    }
+    const headingNodes = searchRoot.querySelectorAll(headingSelector);
     const headingLinks = getUniqueResultLinks(headingNodes);
 
     if (
@@ -151,12 +159,12 @@
       searchMode === SEARCH_MODES.SHORT_VIDEO
     ) {
       const labeledLinks = getUniqueResultLinks(
-        document.querySelectorAll("#search a[href][aria-label]")
+        searchRoot.querySelectorAll("a[href][aria-label]")
       );
       if (labeledLinks.length > 0) return labeledLinks;
 
       const mediaLinks = getUniqueResultLinks(
-        document.querySelectorAll("#search a[href] img")
+        searchRoot.querySelectorAll("a[href] img")
       );
       if (mediaLinks.length > 0) return mediaLinks;
     }
@@ -164,7 +172,7 @@
     if (headingLinks.length > 0) return headingLinks;
 
     return getUniqueResultLinks(
-      document.querySelectorAll(CONFIG.selectors.semanticResultNodes)
+      searchRoot.querySelectorAll(CONFIG.selectors.semanticResultNodes)
     );
   }
 
@@ -201,10 +209,10 @@
   }
 
   function getSemanticResultItems(searchMode) {
-    const searchRoot = document.querySelector(CONFIG.selectors.searchRoot);
+    const searchRoot = getSearchRoot();
     if (!searchRoot) return [];
 
-    const links = getSemanticResultLinks(searchMode);
+    const links = getSemanticResultLinks(searchMode, searchRoot);
     const seenElements = new Set();
     return links
       .map((link) => ({
