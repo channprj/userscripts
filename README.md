@@ -16,7 +16,7 @@
 | 이름                      | 설명                                             | 버전   | Install                                                                                                |
 | ----------------------- | ---------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
-| Google Search Navigator | Google 검색 결과와 이미지·동영상 탭을 Vim 스타일 단축키로 탐색합니다.          | 0.16 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
+| Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.17 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 
@@ -43,7 +43,7 @@ Atlassian Confluence 페이지에서 시야를 가리는 요소들을 정리합�
 
 `[google-search-navigator.user.js](./google-search-navigator.user.js)`
 
-Google 검색 결과와 이미지·동영상 탭을 키보드만으로 빠르게 탐색합니다.
+Google 검색 결과와 이미지·동영상·Short videos·뉴스·쇼핑 탭을 키보드만으로 빠르게 탐색합니다.
 
 
 | 키                  | 동작              |
@@ -59,11 +59,13 @@ Google 검색 결과와 이미지·동영상 탭을 키보드만으로 빠르게
 | `Esc`              | 검색창 포커스 해제      |
 
 
-선택된 항목은 빨간색 좌측 보더로 강조 표시되며, 스크롤도 자동으로 따라옵니다.
+선택된 항목은 굵은 빨간색 외곽선과 halo로 카드 전체가 강조되며, 스크롤도 자동으로 따라옵니다.
 
-이미지 탭에서는 `H` / `J` / `K` / `L` 또는 방향키로 실제 화면 배치에서 가장 가까운 이미지를 찾아 이동합니다.
+이미지와 Short videos 탭에서는 `H` / `J` / `K` / `L` 또는 방향키로 실제 화면 배치에서 가장 가까운 카드를 찾아 이동합니다.
 `Enter`를 처음 누르면 선택된 이미지를 크게 보고, 같은 이미지에서 한 번 더 누르면 원본 페이지로 이동합니다.
 `Cmd/Ctrl + Enter`는 원본 페이지를 새 탭으로 엽니다.
+
+동영상·뉴스·쇼핑 탭에서는 `J` / `K` 또는 위아래 방향키로 결과 카드를 순서대로 이동합니다. `Enter`는 선택된 결과를 열고, `Cmd/Ctrl + Enter`는 새 탭으로 엽니다.
 
 검색 탭은 `g`를 누른 뒤 mnemonic 또는 숫자로 이동합니다.
 

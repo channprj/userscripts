@@ -147,6 +147,10 @@ class FakeElement {
     };
   }
 
+  contains(candidate) {
+    return candidate === this || this._descendants().includes(candidate);
+  }
+
   getElementsByTagName(tagName) {
     const expectedTag = tagName.toUpperCase();
     return this._descendants().filter((node) => node.tagName === expectedTag);
@@ -319,12 +323,49 @@ function createVideoResult(title, href) {
   return link;
 }
 
+function createRichResult({
+  title,
+  href,
+  rect,
+  headingTag = "div",
+  withImage = false,
+  ariaLabel,
+  classes = [],
+}) {
+  const card = new FakeElement("div", { rect, classes });
+  const attrs = { href };
+  if (ariaLabel) attrs["aria-label"] = ariaLabel;
+  const link = new FakeElement("a", { attrs, rect });
+
+  if (withImage) {
+    link.appendChild(
+      new FakeElement("img", {
+        attrs: { alt: title, src: "https://example.test/thumbnail.jpg" },
+      })
+    );
+  }
+
+  if (title && headingTag) {
+    const headingAttrs = headingTag === "h3" ? {} : { role: "heading" };
+    link.appendChild(
+      new FakeElement(headingTag, {
+        attrs: headingAttrs,
+        textContent: title,
+      })
+    );
+  }
+
+  card.appendChild(link);
+  return { card, link };
+}
+
 function loadNavigator({ url, bodyChildren }) {
   const document = new FakeDocument(url);
   document.append(...bodyChildren);
 
   const windowListeners = {};
   const openedUrls = [];
+  const mutationObservers = [];
   const window = {
     document,
     location: document.location,
@@ -342,6 +383,10 @@ function loadNavigator({ url, bodyChildren }) {
     document,
     window,
     MutationObserver: class {
+      constructor(callback) {
+        this.callback = callback;
+        mutationObservers.push(this);
+      }
       observe() {}
       disconnect() {}
     },
@@ -369,8 +414,42 @@ function loadNavigator({ url, bodyChildren }) {
     return event;
   };
 
-  return { document, dispatchKeydown, openedUrls };
+  const dispatchMutations = (mutations) => {
+    for (const observer of mutationObservers) observer.callback(mutations);
+  };
+
+  return { document, dispatchKeydown, dispatchMutations, openedUrls };
 }
+
+test("regular web results keep their layout styles while navigating", () => {
+  const first = createRichResult({
+    title: "First web result",
+    href: "https://web.example/first",
+    headingTag: "h3",
+    classes: ["MjjYud"],
+  });
+  const second = createRichResult({
+    title: "Second web result",
+    href: "https://web.example/second",
+    headingTag: "h3",
+    classes: ["MjjYud"],
+  });
+  first.card.style.cssText = "display:block;margin-bottom:24px";
+  const { dispatchKeydown, openedUrls } = loadNavigator({
+    url: "https://www.google.com/search?q=web",
+    bodyChildren: [first.card, second.card],
+  });
+
+  assert.equal(first.card.getAttribute("data-gsn-selected"), "true");
+  assert.equal(first.card.style.cssText, "display:block;margin-bottom:24px");
+  dispatchKeydown("KeyJ");
+  dispatchKeydown("Enter");
+  assert.equal(second.link.clickCount, 1);
+  dispatchKeydown("Enter", { metaKey: true });
+  assert.deepEqual(openedUrls, [
+    { url: "https://web.example/second", target: "_blank" },
+  ]);
+});
 
 test("Google Images navigation highlights and focuses image cards with arrows and hjkl", () => {
   const first = createImageCard({
@@ -532,18 +611,18 @@ test("Google Videos navigation uses semantic result links when result classes di
     bodyChildren: [search, prevButton, nextButton],
   });
 
-  assert.equal(first.style.cssText.includes("border-left:4px solid red"), true);
+  assert.equal(first.getAttribute("data-gsn-selected"), "true");
 
   dispatchKeydown("KeyJ");
   assert.equal(first.style.cssText, "");
-  assert.equal(second.style.cssText.includes("border-left:4px solid red"), true);
+  assert.equal(second.getAttribute("data-gsn-selected"), "true");
 
   dispatchKeydown("KeyK");
-  assert.equal(first.style.cssText.includes("border-left:4px solid red"), true);
+  assert.equal(first.getAttribute("data-gsn-selected"), "true");
 
   dispatchKeydown("ArrowDown");
   dispatchKeydown("ArrowUp");
-  assert.equal(first.style.cssText.includes("border-left:4px solid red"), true);
+  assert.equal(first.getAttribute("data-gsn-selected"), "true");
 
   dispatchKeydown("ArrowDown");
   dispatchKeydown("Enter");
@@ -575,7 +654,200 @@ test("Google Videos recognizes legacy tbm video search URLs", () => {
     bodyChildren: [search],
   });
 
-  assert.equal(result.style.cssText.includes("border-left:4px solid red"), true);
+  assert.equal(result.getAttribute("data-gsn-selected"), "true");
+});
+
+test("rich results keep external destination URLs that use a search path", () => {
+  const result = createVideoResult(
+    "External site search result",
+    "https://video.example/search?q=keyboard"
+  );
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(result);
+
+  loadNavigator({
+    url: "https://www.google.com/search?q=video&udm=7",
+    bodyChildren: [search],
+  });
+
+  assert.equal(result.getAttribute("data-gsn-selected"), "true");
+});
+
+test("Google Videos selects the visual card and preserves Google inline styles", () => {
+  const first = createRichResult({
+    title: "First video card",
+    href: "https://video.example/first-card",
+    headingTag: "h3",
+    rect: { left: 0, top: 0, width: 640, height: 180 },
+  });
+  const second = createRichResult({
+    title: "Second video card",
+    href: "https://video.example/second-card",
+    headingTag: "h3",
+    rect: { left: 0, top: 200, width: 640, height: 180 },
+  });
+  first.card.style.cssText = "display:grid;grid-template-columns:180px 1fr";
+  second.card.style.cssText = "display:grid;grid-template-columns:180px 1fr";
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(first.card);
+  search.appendChild(second.card);
+
+  const { dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=video&udm=7",
+    bodyChildren: [search],
+  });
+
+  assert.equal(first.card.getAttribute("data-gsn-selected"), "true");
+  assert.equal(first.link.getAttribute("data-gsn-selected"), null);
+  assert.equal(
+    first.card.style.cssText,
+    "display:grid;grid-template-columns:180px 1fr"
+  );
+
+  dispatchKeydown("KeyJ");
+
+  assert.equal(first.card.getAttribute("data-gsn-selected"), null);
+  assert.equal(second.card.getAttribute("data-gsn-selected"), "true");
+  assert.equal(
+    first.card.style.cssText,
+    "display:grid;grid-template-columns:180px 1fr"
+  );
+});
+
+test("Google News navigates semantic heading cards and opens the selected story", () => {
+  const first = createRichResult({
+    title: "First news story",
+    href: "https://news.example/first",
+    rect: { left: 0, top: 0, width: 640, height: 160 },
+  });
+  const second = createRichResult({
+    title: "Second news story",
+    href: "https://news.example/second",
+    rect: { left: 0, top: 180, width: 640, height: 160 },
+  });
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(first.card);
+  search.appendChild(second.card);
+
+  const { dispatchKeydown, openedUrls } = loadNavigator({
+    url: "https://www.google.com/search?q=latest&tbm=nws",
+    bodyChildren: [search],
+  });
+
+  assert.equal(first.card.getAttribute("data-gsn-selected"), "true");
+  dispatchKeydown("ArrowDown");
+  assert.equal(second.card.getAttribute("data-gsn-selected"), "true");
+
+  dispatchKeydown("Enter");
+  assert.equal(second.link.clickCount, 1);
+
+  dispatchKeydown("Enter", { ctrlKey: true });
+  assert.deepEqual(openedUrls, [
+    { url: "https://news.example/second", target: "_blank" },
+  ]);
+});
+
+test("Google Shopping navigates product cards without heading tags", () => {
+  const first = createRichResult({
+    title: "First shoes",
+    href: "https://shop.example/first",
+    withImage: true,
+    headingTag: null,
+    ariaLabel: "First shoes",
+    rect: { left: 0, top: 0, width: 220, height: 320 },
+  });
+  const second = createRichResult({
+    title: "Second shoes",
+    href: "https://shop.example/second",
+    withImage: true,
+    headingTag: null,
+    ariaLabel: "Second shoes",
+    rect: { left: 240, top: 0, width: 220, height: 320 },
+  });
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(first.card);
+  search.appendChild(second.card);
+
+  const { dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=shoes&udm=28",
+    bodyChildren: [search],
+  });
+
+  assert.equal(first.card.getAttribute("data-gsn-selected"), "true");
+  dispatchKeydown("KeyJ");
+  assert.equal(second.card.getAttribute("data-gsn-selected"), "true");
+  dispatchKeydown("Enter");
+  assert.equal(second.link.clickCount, 1);
+});
+
+test("Google Short videos follows image-like spatial navigation", () => {
+  const topLeft = createRichResult({
+    title: "Top left short",
+    href: "https://short.example/top-left",
+    rect: { left: 0, top: 0, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const topRight = createRichResult({
+    title: "Top right short",
+    href: "https://short.example/top-right",
+    rect: { left: 200, top: 0, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const lowerLeft = createRichResult({
+    title: "Lower left short",
+    href: "https://short.example/lower-left",
+    rect: { left: 0, top: 340, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const lowerRight = createRichResult({
+    title: "Lower right short",
+    href: "https://short.example/lower-right",
+    rect: { left: 200, top: 340, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(topLeft.card);
+  search.appendChild(topRight.card);
+  search.appendChild(lowerLeft.card);
+  search.appendChild(lowerRight.card);
+  const prevButton = new FakeElement("a", { attrs: { id: "pnprev" } });
+  const nextButton = new FakeElement("a", { attrs: { id: "pnnext" } });
+
+  const { document, dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=shorts&udm=39",
+    bodyChildren: [search, prevButton, nextButton],
+  });
+
+  assert.equal(document.activeElement, topLeft.card);
+  dispatchKeydown("KeyL");
+  assert.equal(document.activeElement, topRight.card);
+  dispatchKeydown("ArrowDown");
+  assert.equal(document.activeElement, lowerRight.card);
+  dispatchKeydown("KeyH");
+  assert.equal(document.activeElement, lowerLeft.card);
+  dispatchKeydown("ArrowUp");
+  assert.equal(document.activeElement, topLeft.card);
+  assert.equal(prevButton.clickCount, 0);
+  assert.equal(nextButton.clickCount, 0);
+});
+
+test("dynamic rich results refresh navigation after Google renders them", async () => {
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  const { dispatchMutations } = loadNavigator({
+    url: "https://www.google.com/search?q=latest&udm=12",
+    bodyChildren: [search],
+  });
+  const story = createRichResult({
+    title: "Late-rendered story",
+    href: "https://news.example/late",
+    rect: { left: 0, top: 0, width: 640, height: 160 },
+  });
+  search.appendChild(story.card);
+
+  dispatchMutations([{ addedNodes: [story.card] }]);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  assert.equal(story.card.getAttribute("data-gsn-selected"), "true");
 });
 
 test("Google search tab shortcuts open tabs with g plus mnemonic or number", () => {

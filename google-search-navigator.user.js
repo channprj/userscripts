@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.16
+// @version      0.17
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -15,17 +15,14 @@
 
   // Configuration
   const CONFIG = {
-    styles: {
-      selectedLink:
-        "padding-left:8px; margin-left:-12px; border-left:4px solid red;",
-      normal: "",
-    },
     selectors: {
       resultElements: ".MjjYud",
       nestedResultElements: ".A6K0A",
       imageResultElements: ".isv-r, [data-lpage]",
       imagePreviewLink: "a[href*='/imgres'], a[href*='imgurl='], a",
-      videoResultHeadings: "#search a[href] h3",
+      searchRoot: "#search",
+      semanticResultNodes:
+        "#search h3, #search [role='heading'], #search a[href][aria-label], #search a[href] img",
       searchInput: "div textarea",
       contentWrapper: "#rcnt",
       nextButton: "#pnnext",
@@ -47,6 +44,22 @@
     ],
   };
 
+  const SEARCH_MODES = {
+    NORMAL: "normal",
+    IMAGE: "image",
+    VIDEO: "video",
+    SHORT_VIDEO: "short-video",
+    NEWS: "news",
+    SHOPPING: "shopping",
+  };
+
+  const RICH_SEARCH_MODES = new Set([
+    SEARCH_MODES.VIDEO,
+    SEARCH_MODES.SHORT_VIDEO,
+    SEARCH_MODES.NEWS,
+    SEARCH_MODES.SHOPPING,
+  ]);
+
   function hasSearchParam(name, expectedValue) {
     const search =
       (window.location && window.location.search) ||
@@ -65,12 +78,144 @@
       });
   }
 
-  function isImageSearchPage() {
-    return hasSearchParam("tbm", "isch") || hasSearchParam("udm", "2");
+  function getSearchMode() {
+    if (hasSearchParam("tbm", "isch") || hasSearchParam("udm", "2")) {
+      return SEARCH_MODES.IMAGE;
+    }
+    if (hasSearchParam("udm", "39")) {
+      return SEARCH_MODES.SHORT_VIDEO;
+    }
+    if (hasSearchParam("tbm", "vid") || hasSearchParam("udm", "7")) {
+      return SEARCH_MODES.VIDEO;
+    }
+    if (hasSearchParam("tbm", "nws") || hasSearchParam("udm", "12")) {
+      return SEARCH_MODES.NEWS;
+    }
+    if (hasSearchParam("tbm", "shop") || hasSearchParam("udm", "28")) {
+      return SEARCH_MODES.SHOPPING;
+    }
+    return SEARCH_MODES.NORMAL;
   }
 
-  function isVideoSearchPage() {
-    return hasSearchParam("tbm", "vid") || hasSearchParam("udm", "7");
+  function getLinkForSemanticNode(node) {
+    if (!node) return null;
+    if (node.matches && node.matches("a[href]")) return node;
+    return (
+      (node.closest && node.closest("a[href]")) ||
+      (node.querySelector && node.querySelector("a[href]")) ||
+      null
+    );
+  }
+
+  function isUsableResultLink(link) {
+    if (!link) return false;
+    const href = link.href || link.getAttribute("href") || "";
+    if (!href || href.startsWith("#") || href.startsWith("javascript:")) {
+      return false;
+    }
+
+    try {
+      const url = new URL(href, window.location.href);
+      const currentUrl = new URL(window.location.href);
+      return !(
+        url.origin === currentUrl.origin &&
+        url.pathname === "/search" &&
+        url.searchParams.has("q")
+      );
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function getUniqueResultLinks(nodes) {
+    const seenDestinations = new Set();
+    return Array.from(nodes)
+      .map(getLinkForSemanticNode)
+      .filter((link) => {
+        if (!isUsableResultLink(link)) return false;
+        const destination = link.href || link.getAttribute("href");
+        if (seenDestinations.has(destination)) return false;
+        seenDestinations.add(destination);
+        return true;
+      });
+  }
+
+  function getSemanticResultLinks(searchMode) {
+    const headingNodes = document.querySelectorAll(
+      "#search h3, #search [role='heading']"
+    );
+    const headingLinks = getUniqueResultLinks(headingNodes);
+
+    if (
+      searchMode === SEARCH_MODES.SHOPPING ||
+      searchMode === SEARCH_MODES.SHORT_VIDEO
+    ) {
+      const labeledLinks = getUniqueResultLinks(
+        document.querySelectorAll("#search a[href][aria-label]")
+      );
+      if (labeledLinks.length > 0) return labeledLinks;
+
+      const mediaLinks = getUniqueResultLinks(
+        document.querySelectorAll("#search a[href] img")
+      );
+      if (mediaLinks.length > 0) return mediaLinks;
+    }
+
+    if (headingLinks.length > 0) return headingLinks;
+
+    return getUniqueResultLinks(
+      document.querySelectorAll(CONFIG.selectors.semanticResultNodes)
+    );
+  }
+
+  function isReasonableResultContainer(element, link) {
+    if (!element || !element.getBoundingClientRect) return false;
+    const rect = element.getBoundingClientRect();
+    const linkRect = link.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+
+    const maxWidth = Math.max(linkRect.width * 2.5, 960);
+    const maxHeight = Math.max(linkRect.height * 8, 720);
+    return rect.width <= maxWidth && rect.height <= maxHeight;
+  }
+
+  function getVisualResultElement(link, resultLinks, searchRoot) {
+    let resultElement = link;
+    let parent = link.parentElement;
+
+    while (parent && parent !== searchRoot) {
+      const containedResultCount = resultLinks.filter(
+        (candidate) => parent.contains && parent.contains(candidate)
+      ).length;
+      if (
+        containedResultCount !== 1 ||
+        !isReasonableResultContainer(parent, link)
+      ) {
+        break;
+      }
+      resultElement = parent;
+      parent = parent.parentElement;
+    }
+
+    return resultElement;
+  }
+
+  function getSemanticResultItems(searchMode) {
+    const searchRoot = document.querySelector(CONFIG.selectors.searchRoot);
+    if (!searchRoot) return [];
+
+    const links = getSemanticResultLinks(searchMode);
+    const seenElements = new Set();
+    return links
+      .map((link) => ({
+        link,
+        element: getVisualResultElement(link, links, searchRoot),
+      }))
+      .filter(({ element }) => {
+        if (seenElements.has(element)) return false;
+        seenElements.add(element);
+        return true;
+      });
   }
 
   const StyleInstaller = {
@@ -83,10 +228,13 @@
       }
 
       style.textContent = `
-        [data-gsn-image-selected="true"] {
-          outline: 3px solid #d93025 !important;
-          outline-offset: 2px !important;
-          border-radius: 4px !important;
+        [data-gsn-selected="true"] {
+          outline: 5px solid #d93025 !important;
+          outline-offset: 4px !important;
+          border-radius: 10px !important;
+          box-shadow:
+            0 0 0 3px rgba(217, 48, 37, .22),
+            0 10px 30px rgba(60, 64, 67, .18) !important;
         }
 
         [data-gsn-shortcuts-modal="true"] {
@@ -223,23 +371,19 @@
     }
 
     refresh() {
-      this._isImageSearch = isImageSearchPage();
-      const isVideoSearch = isVideoSearchPage();
+      this._searchMode = getSearchMode();
+      this._resultItems = [];
 
-      if (this._isImageSearch) {
-        this._resultElements = document.querySelectorAll(
-          CONFIG.selectors.imageResultElements
-        );
-      } else if (isVideoSearch) {
-        this._resultElements = Array.from(
-          document.querySelectorAll(CONFIG.selectors.videoResultHeadings)
-        )
-          .map((heading) => heading.closest("a"))
-          .filter(
-            (link, index, links) => link && links.indexOf(link) === index
-          );
-      } else {
-        this._resultElements = document.querySelectorAll(
+      if (this._searchMode === SEARCH_MODES.IMAGE) {
+        this._resultItems = Array.from(
+          document.querySelectorAll(CONFIG.selectors.imageResultElements)
+        ).map((element) => ({ element, link: null }));
+      } else if (RICH_SEARCH_MODES.has(this._searchMode)) {
+        this._resultItems = getSemanticResultItems(this._searchMode);
+      }
+
+      if (this._resultItems.length === 0) {
+        let resultElements = document.querySelectorAll(
           CONFIG.selectors.resultElements
         );
         const nestedElements = document.querySelectorAll(
@@ -248,9 +392,16 @@
 
         // Use nested elements if available (for specialized search results)
         if (nestedElements.length > 0) {
-          this._resultElements = nestedElements;
+          resultElements = nestedElements;
         }
+
+        this._resultItems = Array.from(resultElements).map((element) => ({
+          element,
+          link: getLinkForSemanticNode(element),
+        }));
       }
+
+      this._resultElements = this._resultItems.map(({ element }) => element);
 
       this._searchInput = document.querySelector(CONFIG.selectors.searchInput);
       this._contentWrapper = document.querySelector(
@@ -270,8 +421,19 @@
       return this._contentWrapper;
     }
 
+    getResultLink(index) {
+      return this._resultItems[index] && this._resultItems[index].link;
+    }
+
     get isImageSearch() {
-      return this._isImageSearch;
+      return this._searchMode === SEARCH_MODES.IMAGE;
+    }
+
+    get isSpatialSearch() {
+      return (
+        this._searchMode === SEARCH_MODES.IMAGE ||
+        this._searchMode === SEARCH_MODES.SHORT_VIDEO
+      );
     }
   }
 
@@ -428,7 +590,7 @@
       return prevIndex >= 0 ? prevIndex : currentIndex;
     }
 
-    findDirectionalImageIndex(currentIndex, direction) {
+    findDirectionalResultIndex(currentIndex, direction) {
       const elements = Array.from(domCache.resultElements);
       const currentElement = elements[currentIndex];
       if (!Utils.isValidResultNode(currentElement)) {
@@ -505,12 +667,9 @@
         const element = elements[index];
         element.setAttribute("data-gsn-selected", "true");
 
-        if (domCache.isImageSearch) {
-          element.setAttribute("data-gsn-image-selected", "true");
+        if (domCache.isSpatialSearch) {
           element.setAttribute("tabindex", "-1");
           element.focus();
-        } else {
-          element.style.cssText = CONFIG.styles.selectedLink;
         }
 
         element.scrollIntoView(CONFIG.scrollBehavior);
@@ -522,11 +681,6 @@
       if (index >= 0 && index < elements.length) {
         const element = elements[index];
         element.removeAttribute("data-gsn-selected");
-        element.removeAttribute("data-gsn-image-selected");
-
-        if (!domCache.isImageSearch) {
-          element.style.cssText = CONFIG.styles.normal;
-        }
       }
     }
 
@@ -571,7 +725,8 @@
           return;
         }
 
-        const selectedLink = Utils.getResultLink(elements[index]);
+        const selectedLink =
+          domCache.getResultLink(index) || Utils.getResultLink(elements[index]);
         if (selectedLink) {
           if (openInNewTab) {
             // Open in new background tab
@@ -623,9 +778,9 @@
       this.setHighlight(this.focusIndex);
     }
 
-    navigateImageDirection(direction) {
+    navigateSpatialDirection(direction) {
       this.clearHighlight(this.focusIndex);
-      const nextIndex = this.findDirectionalImageIndex(
+      const nextIndex = this.findDirectionalResultIndex(
         this.focusIndex,
         direction
       );
@@ -740,10 +895,13 @@
         {
           title: "Results",
           rows: [
-            { keys: ["J", "Down"], label: "Next result or image below" },
-            { keys: ["K", "Up"], label: "Previous result or image above" },
-            { keys: ["H", "Left"], label: "Previous page or image left" },
-            { keys: ["L", "Right"], label: "Next page or image right" },
+            { keys: ["J", "Down"], label: "Next result or grid item below" },
+            {
+              keys: ["K", "Up"],
+              label: "Previous result or grid item above",
+            },
+            { keys: ["H", "Left"], label: "Previous page or grid item left" },
+            { keys: ["L", "Right"], label: "Next page or grid item right" },
             { keys: ["Enter"], label: "Open or preview selected result" },
             {
               keys: ["Cmd/Ctrl+Enter"],
@@ -940,8 +1098,8 @@
       // Navigation keys
       if (keyCode === "KeyJ" || keyCode === "ArrowDown") {
         event.preventDefault();
-        if (domCache.isImageSearch) {
-          navigation.navigateImageDirection("down");
+        if (domCache.isSpatialSearch) {
+          navigation.navigateSpatialDirection("down");
           return;
         }
         navigation.navigateNext();
@@ -950,8 +1108,8 @@
 
       if (keyCode === "KeyK" || keyCode === "ArrowUp") {
         event.preventDefault();
-        if (domCache.isImageSearch) {
-          navigation.navigateImageDirection("up");
+        if (domCache.isSpatialSearch) {
+          navigation.navigateSpatialDirection("up");
           return;
         }
         navigation.navigatePrev();
@@ -982,8 +1140,8 @@
           return;
         }
         event.preventDefault();
-        if (domCache.isImageSearch) {
-          navigation.navigateImageDirection("right");
+        if (domCache.isSpatialSearch) {
+          navigation.navigateSpatialDirection("right");
           return;
         }
         PaginationHandler.handlePagination("next");
@@ -992,8 +1150,8 @@
 
       if (keyCode === "KeyH" || keyCode === "ArrowLeft") {
         event.preventDefault();
-        if (domCache.isImageSearch) {
-          navigation.navigateImageDirection("left");
+        if (domCache.isSpatialSearch) {
+          navigation.navigateSpatialDirection("left");
           return;
         }
         PaginationHandler.handlePagination("prev");
@@ -1019,16 +1177,34 @@
           // Check if search results have changed
           const hasNewResults = mutations.some((mutation) =>
             Array.from(mutation.addedNodes).some(
-              (node) =>
-                node.nodeType === Node.ELEMENT_NODE &&
-                ((node.matches &&
+              (node) => {
+                if (node.nodeType !== Node.ELEMENT_NODE) return false;
+
+                const matchesLegacyResult =
+                  node.matches &&
                   (node.matches(CONFIG.selectors.resultElements) ||
-                    node.matches(CONFIG.selectors.imageResultElements) ||
-                    node.matches(CONFIG.selectors.videoResultHeadings))) ||
-                  (node.querySelector &&
-                    (node.querySelector(CONFIG.selectors.resultElements) ||
-                      node.querySelector(CONFIG.selectors.imageResultElements) ||
-                      node.querySelector(CONFIG.selectors.videoResultHeadings))))
+                    node.matches(CONFIG.selectors.imageResultElements));
+                const containsLegacyResult =
+                  node.querySelector &&
+                  (node.querySelector(CONFIG.selectors.resultElements) ||
+                    node.querySelector(CONFIG.selectors.imageResultElements));
+                const belongsToSearch =
+                  node.matches &&
+                  (node.matches(CONFIG.selectors.searchRoot) ||
+                    (node.closest &&
+                      node.closest(CONFIG.selectors.searchRoot)));
+                const containsSemanticResult =
+                  belongsToSearch &&
+                  ((node.matches && node.matches("a[href]")) ||
+                    (node.closest && node.closest("a[href]")) ||
+                    (node.querySelector && node.querySelector("a[href]")));
+
+                return (
+                  matchesLegacyResult ||
+                  containsLegacyResult ||
+                  containsSemanticResult
+                );
+              }
             )
           );
 
