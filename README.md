@@ -16,7 +16,7 @@
 | 이름                      | 설명                                             | 버전   | Install                                                                                                |
 | ----------------------- | ---------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
-| Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.19 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
+| Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 
@@ -61,7 +61,7 @@ Google 검색 결과와 이미지·동영상·Short videos·뉴스·쇼핑 탭�
 
 선택된 항목은 굵은 빨간색 외곽선과 halo로 카드 전체가 강조되며, 스크롤도 자동으로 따라옵니다.
 
-이미지와 Short videos 탭에서는 `H` / `J` / `K` / `L` 또는 방향키로 실제 화면 배치에서 가장 가까운 카드를 찾아 이동합니다.
+이미지와 Short videos 탭에서는 `H` / `J` / `K` / `L` 또는 방향키로 실제 화면 배치에서 해당 방향의 같은 행·열에 가까운 카드를 우선해 이동합니다.
 `Enter`를 처음 누르면 선택된 이미지를 크게 보고, 같은 이미지에서 한 번 더 누르면 원본 페이지로 이동합니다.
 `Cmd/Ctrl + Enter`는 원본 페이지를 새 탭으로 엽니다.
 

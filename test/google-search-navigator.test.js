@@ -65,12 +65,14 @@ class FakeElement {
 
   appendChild(child) {
     child.parentElement = this;
-    child.ownerDocument = this.ownerDocument;
     this.children.push(child);
-    for (const grandchild of child.children) {
-      grandchild.ownerDocument = this.ownerDocument;
-    }
+    child.setOwnerDocument(this.ownerDocument);
     return child;
+  }
+
+  setOwnerDocument(ownerDocument) {
+    this.ownerDocument = ownerDocument;
+    for (const child of this.children) child.setOwnerDocument(ownerDocument);
   }
 
   get textContent() {
@@ -913,6 +915,115 @@ test("Google Short videos follows image-like spatial navigation", () => {
   assert.equal(document.activeElement, topLeft.card);
   assert.equal(prevButton.clickCount, 0);
   assert.equal(nextButton.clickCount, 0);
+});
+
+test("Google Short videos ignores small row offsets during vertical navigation", () => {
+  const topLeft = createRichResult({
+    title: "Top left short",
+    href: "https://short.example/top-left",
+    ariaLabel: "Top left short",
+    rect: { left: 0, top: 0, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const topRight = createRichResult({
+    title: "Top right short",
+    href: "https://short.example/top-right",
+    ariaLabel: "Top right short",
+    rect: { left: 200, top: 12, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const lowerLeft = createRichResult({
+    title: "Lower left short",
+    href: "https://short.example/lower-left",
+    ariaLabel: "Lower left short",
+    rect: { left: 0, top: 500, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const lowerRight = createRichResult({
+    title: "Lower right short",
+    href: "https://short.example/lower-right",
+    ariaLabel: "Lower right short",
+    rect: { left: 200, top: 512, width: 180, height: 320 },
+    classes: ["MjjYud"],
+  });
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(topLeft.card);
+  search.appendChild(topRight.card);
+  search.appendChild(lowerLeft.card);
+  search.appendChild(lowerRight.card);
+
+  const { document, dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=shorts&udm=39",
+    bodyChildren: [search],
+  });
+
+  dispatchKeydown("ArrowDown");
+  assert.equal(document.activeElement, lowerLeft.card);
+
+  dispatchKeydown("ArrowRight");
+  assert.equal(document.activeElement, lowerRight.card);
+
+  dispatchKeydown("ArrowUp");
+  assert.equal(document.activeElement, topRight.card);
+});
+
+test("Google Short videos treats multiple links as one card and opens its media", () => {
+  const createShortCard = (left, mainHref, creatorHref) => {
+    const card = new FakeElement("div", {
+      classes: ["MjjYud"],
+      rect: { left, top: 0, width: 180, height: 320 },
+    });
+    const mainLink = new FakeElement("a", {
+      attrs: { href: mainHref },
+      rect: { left, top: 0, width: 180, height: 280 },
+    });
+    mainLink.appendChild(
+      new FakeElement("img", {
+        attrs: { alt: "Short video thumbnail" },
+        rect: { left, top: 0, width: 180, height: 280 },
+      })
+    );
+    const creatorLink = new FakeElement("a", {
+      attrs: { href: creatorHref, "aria-label": "Open creator" },
+      rect: { left, top: 288, width: 180, height: 32 },
+    });
+    creatorLink.appendChild(
+      new FakeElement("span", { textContent: "Creator" })
+    );
+    card.appendChild(creatorLink);
+    card.appendChild(mainLink);
+    return { card, mainLink, creatorLink };
+  };
+
+  const first = createShortCard(
+    0,
+    "https://short.example/first",
+    "https://short.example/creator-one"
+  );
+  const second = createShortCard(
+    200,
+    "https://short.example/second",
+    "https://short.example/creator-two"
+  );
+  const search = new FakeElement("div", { attrs: { id: "search" } });
+  search.appendChild(first.card);
+  search.appendChild(second.card);
+
+  const { document, dispatchKeydown } = loadNavigator({
+    url: "https://www.google.com/search?q=shorts&udm=39",
+    bodyChildren: [search],
+  });
+
+  assert.equal(document.activeElement, first.card);
+  assert.equal(first.card.getAttribute("data-gsn-selected"), "true");
+  assert.equal(first.mainLink.getAttribute("data-gsn-selected"), null);
+  assert.equal(first.creatorLink.getAttribute("data-gsn-selected"), null);
+
+  dispatchKeydown("ArrowRight");
+  assert.equal(document.activeElement, second.card);
+  dispatchKeydown("Enter");
+  assert.equal(second.mainLink.clickCount, 1);
+  assert.equal(second.creatorLink.clickCount, 0);
 });
 
 test("dynamic rich results refresh navigation after Google renders them", async () => {

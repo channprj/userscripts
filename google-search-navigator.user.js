@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.19
+// @version      0.20
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -154,10 +154,13 @@
     const headingNodes = searchRoot.querySelectorAll(headingSelector);
     const headingLinks = getUniqueResultLinks(headingNodes);
 
-    if (
-      searchMode === SEARCH_MODES.SHOPPING ||
-      searchMode === SEARCH_MODES.SHORT_VIDEO
-    ) {
+    if (searchMode === SEARCH_MODES.SHORT_VIDEO) {
+      const shortVideoLinks = getUniqueResultLinks([
+        ...searchRoot.querySelectorAll("a[href] img"),
+        ...searchRoot.querySelectorAll("a[href][aria-label]"),
+      ]);
+      if (shortVideoLinks.length > 0) return shortVideoLinks;
+    } else if (searchMode === SEARCH_MODES.SHOPPING) {
       const labeledLinks = getUniqueResultLinks(
         searchRoot.querySelectorAll("a[href][aria-label]")
       );
@@ -187,16 +190,31 @@
     return rect.width <= maxWidth && rect.height <= maxHeight;
   }
 
-  function getVisualResultElement(link, resultLinks, searchRoot) {
+  function isPrimaryShortVideoLink(link) {
+    return Boolean(
+      link &&
+        link.querySelector &&
+        link.querySelector("img, h3, [role='heading']")
+    );
+  }
+
+  function getVisualResultElement(link, resultLinks, searchRoot, searchMode) {
     let resultElement = link;
     let parent = link.parentElement;
 
     while (parent && parent !== searchRoot) {
-      const containedResultCount = resultLinks.filter(
+      const containedResultLinks = resultLinks.filter(
         (candidate) => parent.contains && parent.contains(candidate)
+      );
+      const containedPrimaryCount = containedResultLinks.filter(
+        isPrimaryShortVideoLink
       ).length;
+      const containsOneResult = containedResultLinks.length === 1;
+      const containsOneShortVideo =
+        searchMode === SEARCH_MODES.SHORT_VIDEO &&
+        containedPrimaryCount === 1;
       if (
-        containedResultCount !== 1 ||
+        (!containsOneResult && !containsOneShortVideo) ||
         !isReasonableResultContainer(parent, link)
       ) {
         break;
@@ -213,17 +231,24 @@
     if (!searchRoot) return [];
 
     const links = getSemanticResultLinks(searchMode, searchRoot);
-    const seenElements = new Set();
-    return links
-      .map((link) => ({
+    const itemsByElement = new Map();
+    links.forEach((link) => {
+      const item = {
         link,
-        element: getVisualResultElement(link, links, searchRoot),
-      }))
-      .filter(({ element }) => {
-        if (seenElements.has(element)) return false;
-        seenElements.add(element);
-        return true;
-      });
+        element: getVisualResultElement(link, links, searchRoot, searchMode),
+      };
+      const existingItem = itemsByElement.get(item.element);
+      const shouldPreferPrimaryLink =
+        searchMode === SEARCH_MODES.SHORT_VIDEO &&
+        isPrimaryShortVideoLink(item.link) &&
+        existingItem &&
+        !isPrimaryShortVideoLink(existingItem.link);
+
+      if (!existingItem || shouldPreferPrimaryLink) {
+        itemsByElement.set(item.element, item);
+      }
+    });
+    return Array.from(itemsByElement.values());
   }
 
   const StyleInstaller = {
@@ -646,17 +671,22 @@
           index,
           score,
           primaryDistance,
+          isInDirectionalCone: primaryDistance >= crossAxisDistance,
           domDistance: Math.abs(index - currentIndex),
         };
 
         if (
           !bestMatch ||
-          candidate.score < bestMatch.score ||
-          (candidate.score === bestMatch.score &&
-            candidate.primaryDistance < bestMatch.primaryDistance) ||
-          (candidate.score === bestMatch.score &&
-            candidate.primaryDistance === bestMatch.primaryDistance &&
-            candidate.domDistance < bestMatch.domDistance)
+          (candidate.isInDirectionalCone &&
+            !bestMatch.isInDirectionalCone) ||
+          (candidate.isInDirectionalCone ===
+            bestMatch.isInDirectionalCone &&
+            (candidate.score < bestMatch.score ||
+              (candidate.score === bestMatch.score &&
+                candidate.primaryDistance < bestMatch.primaryDistance) ||
+              (candidate.score === bestMatch.score &&
+                candidate.primaryDistance === bestMatch.primaryDistance &&
+                candidate.domDistance < bestMatch.domDistance)))
         ) {
           bestMatch = candidate;
         }
