@@ -3,7 +3,7 @@
 // @description  Navigate google search with custom shortcuts
 // @namespace    https://github.com/channprj/google-search-navigator
 // @icon         https://user-images.githubusercontent.com/1831308/60544915-c043e700-9d54-11e9-9eb0-5c80c85d3a28.png
-// @version      0.18
+// @version      0.19
 // @author       channprj
 // @run-at       document-end
 // @include      http*://*.google.tld/search*
@@ -33,8 +33,8 @@
       block: "center",
     },
     searchTabs: [
-      { label: "AI Mode", mnemonic: "m", digit: "1" },
-      { label: "All", mnemonic: "a", digit: "2" },
+      { label: "AI Mode", mnemonic: "a", digit: "1" },
+      { label: "All", mnemonic: "h", digit: "2" },
       { label: "Videos", mnemonic: "v", digit: "3" },
       { label: "Images", mnemonic: "i", digit: "4" },
       { label: "Short videos", mnemonic: "s", digit: "5" },

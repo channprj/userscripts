@@ -16,7 +16,7 @@
 | 이름                      | 설명                                             | 버전   | Install                                                                                                |
 | ----------------------- | ---------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
-| Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.18 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
+| Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.19 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 
@@ -71,8 +71,8 @@ Google 검색 결과와 이미지·동영상·Short videos·뉴스·쇼핑 탭�
 
 | 키 | 검색 탭 |
 | --- | --- |
-| `g m` / `g 1` | AI Mode |
-| `g a` / `g 2` | All |
+| `g a` / `g 1` | AI Mode |
+| `g h` / `g 2` | All |
 | `g v` / `g 3` | Videos |
 | `g i` / `g 4` | Images |
 | `g s` / `g 5` | Short videos |

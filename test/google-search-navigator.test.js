@@ -950,8 +950,8 @@ test("Google search tab shortcuts open tabs with g plus mnemonic or number", () 
     bodyChildren: Object.values(tabs),
   });
   const shortcuts = [
-    [tabs.aiMode, "KeyM", "Digit1"],
-    [tabs.all, "KeyA", "Digit2"],
+    [tabs.aiMode, "KeyA", "Digit1"],
+    [tabs.all, "KeyH", "Digit2"],
     [tabs.videos, "KeyV", "Digit3"],
     [tabs.images, "KeyI", "Digit4"],
     [tabs.shortVideos, "KeyS", "Digit5"],
@@ -995,6 +995,8 @@ test("question mark opens a theme-aware shortcuts modal with kbd labels that Esc
   assert.ok(shortcutKeys.includes("Down"));
   assert.ok(shortcutKeys.includes("g i"));
   assert.ok(shortcutKeys.includes("g 4"));
+  assert.ok(shortcutKeys.includes("g a"));
+  assert.ok(shortcutKeys.includes("g h"));
   assert.ok(shortcutKeys.includes("?"));
   assert.match(modal.textContent, /Google Search Navigator Shortcuts/);
   assert.match(modal.textContent, /Images/);
