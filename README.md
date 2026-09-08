@@ -19,6 +19,7 @@
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
+| GitHub Account Switcher | Organization/user별로 계정을 자동 전환하고 나머지 경로에서는 개인 계정을 사용합니다. | 0.1.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
 
 ---
@@ -111,6 +112,40 @@ iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Ph
 
 ---
 
+### GitHub Account Switcher
+
+[`github-account-switcher.user.js`](./github-account-switcher.user.js)
+
+GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user에 맞는 계정으로 자동 전환합니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용합니다.
+
+1. 같은 브라우저의 GitHub에서 프로필 메뉴 → **Account switcher → Add account**로 사용할 계정들을 먼저 로그인합니다. 자세한 내용은 [GitHub 계정 전환 안내](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/switching-between-accounts)를 참고하세요.
+2. 위 **Install** 링크로 스크립트를 설치하고 GitHub 페이지를 새로고침합니다.
+3. 페이지의 **설정** 버튼 또는 Tampermonkey / Violentmonkey 메뉴의 **GitHub Account Switcher: 설정**을 엽니다.
+4. **기본 개인 계정 username**을 입력하고, 전환 규칙을 한 줄에 하나씩 입력한 뒤 저장합니다.
+
+다음은 형식 설명을 위한 가상 예시입니다. 실제 사용할 이름은 설정 화면에서 직접 입력하세요.
+
+```text
+sample-team = sample-work
+sample-user = second-work
+```
+
+- 왼쪽은 URL의 organization/user 이름, 오른쪽은 전환할 계정의 **username**입니다. 표시 이름이나 URL 전체를 넣지 않습니다.
+- `/sample-team` 및 그 아래 저장소·이슈·PR 경로, `/orgs/sample-team/...`, `/users/sample-user/...`를 인식합니다. 대소문자는 구분하지 않으며 `sample-team-extra`처럼 일부만 같은 이름은 매칭하지 않습니다.
+- 설정의 초기값은 비어 있습니다. 입력한 계정명과 규칙은 `GM_setValue`를 통해 userscript 매니저 저장소에만 보관하며, 코드·설정 파일·Git 저장소에는 기록하지 않습니다. 스크립트 업데이트 후에도 설정이 유지됩니다. 매니저 자체의 백업·동기화 설정은 별도로 적용됩니다.
+- **설정**에서 규칙 수정·삭제가 가능하며, 매니저 메뉴에서 **자동 전환 켜기/끄기**, **다시 시도**를 사용할 수 있습니다.
+- URL 직접 접근과 GitHub 내부 페이지 이동을 감지합니다. 전환 중 메뉴가 잠깐 열릴 수 있으며, 원래 방문한 주소로 돌아가는 처리는 GitHub의 기본 전환 기능을 이용합니다.
+
+동작 범위와 예외:
+
+- `https://github.com/*`에 적용됩니다. GitHub.com의 Enterprise Managed User 계정도 사용할 수 있습니다. 별도 도메인의 Enterprise Server에는 적용되지 않습니다.
+- 현재 보고 있는 활성 탭에서만 전환합니다. GitHub 로그인은 같은 브라우저의 탭들이 공유하므로 탭마다 계정을 독립적으로 유지하지는 않습니다. 다른 탭에서 계정이 바뀌었다면 현재 계정을 확인하고 필요할 때 페이지를 새로고침합니다.
+- 로그인·로그아웃·SSO·2FA 등 인증 화면에서는 자동 전환을 보류합니다. 계정이 없거나 세션이 만료되면 직접 계정을 추가하거나 재인증한 후 **다시 시도**를 누르세요. 비밀번호와 인증 토큰은 수집하거나 저장하지 않습니다.
+- 댓글이나 폼을 편집한 뒤 해당 입력란이 화면에 남아 있으면 전환을 보류합니다. 내용을 저장한 다음 페이지를 새로고침하면 다시 동작합니다.
+- 전환 실패가 반복되면 자동 재시도를 멈춥니다. 상태를 확인한 뒤 **다시 시도**를 누르세요. GitHub 메뉴 구조가 바뀌어 계정을 찾지 못한 경우에도 알림을 표시하고 멈춥니다.
+
+---
+
 ## 개발
 
 새 userscript를 추가할 때는 다음을 지켜주세요.
@@ -118,6 +153,16 @@ iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Ph
 - 파일명은 `*.user.js`로 끝나야 매니저가 자동 설치 모드로 인식합니다.
 - 상단에 `// ==UserScript== ... // ==/UserScript==` 메타데이터 블록을 반드시 포함합니다.
 - 위 **Userscripts** 표와 상세 섹션에 항목을 추가합니다.
+
+테스트는 Node.js 22.22.2 이상(22.x), 24.15.0 이상(24.x), 또는 26 이상에서 실행합니다. 설치해서 사용하는 userscript 자체에는 Node.js가 필요하지 않습니다.
+
+```sh
+npm ci
+npm test
+npm run check
+```
+
+GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. 경로별 전환, 개인 계정 복귀, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다.
 
 ## License
 
