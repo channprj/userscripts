@@ -116,12 +116,46 @@ for (const route of ['/sample-team', '/SAMPLE-TEAM/repo', '/orgs/sample-team/pro
     assert.equal(h.clicks[0]?.account, 'sample-work');
   });
 }
-for (const route of ['/', '/sample-team-extra/repo', '/another-owner/repo', '/search?q=sample-team', '/settings/profile', '/enterprises/sample-team/settings']) {
+for (const route of ['/', '/sample-team-extra/repo', '/another-owner/repo', '/another-owner/repo?q=sample-team', '/enterprises/sample-team/settings', '/%E0%A4%A/repo']) {
   test(`returns to the personal account: ${route}`, async t => {
     const h = setup(t, {route, current:'sample-work'}); await h.flush();
     assert.equal(h.clicks[0]?.account, 'sample-personal');
   });
 }
+
+for (const route of [
+  '/settings', '/settings/profile', '/settings/security', '/SETTINGS/profile',
+  '/notifications', '/dashboard', '/codespaces', '/pulls', '/issues', '/stars',
+  '/search?q=sample-team', '/explore', '/marketplace', '/new', '/organizations/new',
+]) {
+  test(`keeps the current account on settings and system pages: ${route}`, async t => {
+    const h = setup(t, {route, current:'sample-work'}); await h.flush();
+    assert.equal(h.clicks.length, 0);
+    assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
+    assert.equal(h.document.querySelector('[data-gas-notice]'), null);
+  });
+}
+
+for (const route of ['/sample-team/settings', '/sample-team/repo/settings/actions', '/orgs/sample-team/settings/profile']) {
+  test(`organization and repository settings still switch: ${route}`, async t => {
+    const h = setup(t, {route}); await h.flush();
+    assert.equal(h.clicks[0]?.account, 'sample-work');
+  });
+}
+
+test('leaving a settings page resumes switching', async t => {
+  const h = setup(t, {route:'/settings/profile'}); await h.flush();
+  assert.equal(h.clicks.length, 0);
+  await h.navigate('/sample-team/repo');
+  assert.equal(h.clicks[0]?.account, 'sample-work');
+});
+
+test('a system page holds the account chosen for the previous owner page', async t => {
+  const h = setup(t, {current:'sample-work'}); await h.flush();
+  assert.equal(h.clicks.length, 0);
+  await h.navigate('/notifications');
+  assert.equal(h.clicks.length, 0);
+});
 
 for (const route of ['/enterprises/', '/enterprises/sample-company', '/enterprises/another-company/settings/billing?tab=usage#details', '/ENTERPRISES/sample-company/people']) {
   test(`matches the enterprise prefix and retains the destination: ${route}`, async t => {
@@ -130,7 +164,7 @@ for (const route of ['/enterprises/', '/enterprises/sample-company', '/enterpris
   });
 }
 
-for (const route of ['/enterprises', '/enterprises-extra/sample-company', '/another-owner/enterprises/repo', '/search?q=/enterprises/sample-company', '/orgs/enterprises/projects/1', '/enterprises%2F*/repo', '/orgs/enterprises%2F*/projects/1']) {
+for (const route of ['/enterprises', '/enterprises-extra/sample-company', '/another-owner/enterprises/repo', '/another-owner/repo?q=/enterprises/sample-company', '/orgs/enterprises/projects/1', '/enterprises%2F*/repo', '/orgs/enterprises%2F*/projects/1']) {
   test(`the enterprise rule does not match outside its prefix: ${route}`, async t => {
     const h = setup(t, {route, current:'sample-work', values:new Map([['settings', enterpriseConfig]])}); await h.flush();
     assert.equal(h.clicks[0]?.account, 'sample-personal');

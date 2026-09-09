@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.2.0
+// @version      0.2.1
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -20,6 +20,16 @@
   const EMPTY = { personal: '', rules: [], enabled: true };
   const NAME_PATTERN = /^[a-z\d](?:[a-z\d_-]*[a-z\d])?$/i;
   const ENTERPRISES_RULE = 'enterprises/*';
+  // GitHub reserves these first path segments for account settings and site-wide
+  // pages. They belong to no organization or user, so a switch is never intended.
+  const SYSTEM_PATHS = new Set([
+    'about', 'apps', 'blog', 'business', 'careers', 'changelog', 'codespaces',
+    'collections', 'contact', 'customer-stories', 'dashboard', 'enterprise',
+    'events', 'explore', 'features', 'git-lfs', 'home', 'import', 'integrations',
+    'issues', 'marketplace', 'new', 'nonprofit', 'notifications', 'organizations',
+    'pricing', 'pulls', 'readme', 'search', 'security', 'settings', 'site',
+    'sponsors', 'stars', 'topics', 'trending', 'watching',
+  ]);
   const SWITCH_COOLDOWN = 30_000;
   let busy = false;
   let lastKey = '';
@@ -28,6 +38,7 @@
   const editedControls = new Set();
 
   const normalized = value => String(value ?? '').trim().toLowerCase();
+  const decoded = value => { try { return decodeURIComponent(value); } catch { return value; } };
   const validRuleOwner = value => NAME_PATTERN.test(value ?? '') || normalized(value) === ENTERPRISES_RULE;
   const active = () => document.visibilityState === 'visible' && document.hasFocus();
   const login = doc => normalized(doc.querySelector('meta[name="user-login"]')?.content);
@@ -57,10 +68,15 @@
       || /^\/apps\/[^/]+\/(?:installations|permissions)(?:\/|$)/i.test(pathname);
   }
 
+  // /settings/profile and similar pages act on the signed-in account itself.
+  function isSystem(pathname) {
+    return SYSTEM_PATHS.has(normalized(decoded(pathname.split('/').filter(Boolean)[0] ?? '')));
+  }
+
   function targetAccount(url, config) {
     const enterpriseRule = /^\/enterprises\//i.test(url.pathname)
       ? config.rules.find(rule => normalized(rule.owner) === ENTERPRISES_RULE) : null;
-    const parts = url.pathname.split('/').filter(Boolean).map(part => decodeURIComponent(part));
+    const parts = url.pathname.split('/').filter(Boolean).map(part => decoded(part));
     const owner = normalized(['orgs', 'users'].includes(parts[0]?.toLowerCase()) ? parts[1] : parts[0]);
     const ownerRule = config.rules.find(rule => normalized(rule.owner) === owner && owner !== ENTERPRISES_RULE);
     return normalized(enterpriseRule?.account ?? ownerRule?.account ?? config.personal);
@@ -105,7 +121,7 @@
         <textarea name="rules" rows="6" autocomplete="off" spellcheck="false" style="display:block;width:100%;box-sizing:border-box;margin:6px 0;padding:8px"></textarea>
       </label>
       <p>한 줄에 <code>organization 또는 user = 전환할 username</code>을 입력하세요. URL 대신 이름만 입력합니다.</p>
-      <p><code>/enterprises/</code> 아래 모든 경로에는 <code>enterprises/* = 전환할 username</code>을 사용하세요. SSO 등 인증 화면에서는 전환을 보류하며, 규칙에 없는 경로에서는 개인 계정을 사용합니다.</p>
+      <p><code>/enterprises/</code> 아래 모든 경로에는 <code>enterprises/* = 전환할 username</code>을 사용하세요. SSO 등 인증 화면과 <code>/settings</code> 같은 GitHub 설정·시스템 페이지에서는 전환을 보류하며, 규칙에 없는 경로에서는 개인 계정을 사용합니다.</p>
       <label><input type="checkbox" name="enabled"> 자동 전환 사용</label>
       <p>설정은 이 브라우저의 userscript 매니저 저장소에만 저장됩니다. 코드나 저장소 파일은 수정하지 않습니다.</p>
       <p role="alert" data-gas-error style="color:#cf222e"></p>
@@ -253,7 +269,7 @@
     const config = settings();
     if (!config || config.enabled === false) return;
     const url = new URL(location.href);
-    if (isAuthentication(url.pathname)) return;
+    if (isAuthentication(url.pathname) || isSystem(url.pathname)) return;
     const serialized = JSON.stringify(config);
     const key = `${url.href}\n${activation}\n${serialized}`;
     if (lastKey === key) return;
