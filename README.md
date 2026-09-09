@@ -19,7 +19,7 @@
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
-| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 전환합니다. | 0.2.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
+| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 전환합니다. | 0.2.1 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
 
 ---
@@ -116,7 +116,7 @@ iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Ph
 
 [`github-account-switcher.user.js`](./github-account-switcher.user.js)
 
-GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user 또는 Enterprise 경로에 맞는 계정으로 자동 전환합니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용합니다.
+GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user 또는 Enterprise 경로에 맞는 계정으로 자동 전환합니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용하며, `/settings` 같은 GitHub 설정·시스템 페이지에서는 전환하지 않습니다.
 
 1. 같은 브라우저의 GitHub에서 프로필 메뉴 → **Account switcher → Add account**로 사용할 계정들을 먼저 로그인합니다. 자세한 내용은 [GitHub 계정 전환 안내](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/switching-between-accounts)를 참고하세요.
 2. 위 **Install** 링크로 스크립트를 설치하고 GitHub 페이지를 새로고침합니다.
@@ -160,6 +160,7 @@ enterprises/* = sample-work
 
 - `https://github.com/*`에 적용됩니다. GitHub.com의 Enterprise Managed User 계정도 사용할 수 있습니다. 별도 도메인의 Enterprise Server에는 적용되지 않습니다.
 - 현재 보고 있는 활성 탭에서만 전환합니다. GitHub 로그인은 같은 브라우저의 탭들이 공유하므로 탭마다 계정을 독립적으로 유지하지는 않습니다. 다른 탭에서 계정이 바뀌었다면 현재 계정을 확인하고 필요할 때 페이지를 새로고침합니다.
+- `/settings`, `/notifications`, `/pulls`, `/issues`, `/codespaces`, `/search`, `/explore`, `/marketplace`처럼 GitHub이 예약한 설정·시스템 경로에서는 전환하지 않고 현재 계정을 유지합니다. 이 페이지들은 특정 organization/user가 아니라 로그인한 계정 자체를 다루기 때문입니다. 반면 `/sample-team/repo/settings`나 `/orgs/sample-team/settings`처럼 organization/user 이름으로 시작하는 설정 경로에는 규칙을 그대로 적용합니다.
 - 로그인·로그아웃·SSO·2FA 등 인증 화면에서는 자동 전환을 보류합니다. 계정이 없거나 세션이 만료되면 직접 계정을 추가하거나 재인증한 후 **다시 시도**를 누르세요. 비밀번호와 인증 토큰은 수집하거나 저장하지 않습니다.
 - 댓글이나 폼을 편집한 뒤 해당 입력란이 화면에 남아 있으면 전환을 보류합니다. 내용을 저장한 다음 페이지를 새로고침하면 다시 동작합니다.
 - 전환 실패가 반복되면 자동 재시도를 멈춥니다. 상태를 확인한 뒤 **다시 시도**를 누르세요. GitHub 메뉴 구조가 바뀌어 계정을 찾지 못한 경우에도 알림을 표시하고 멈춥니다.
@@ -182,7 +183,7 @@ npm test
 npm run check
 ```
 
-GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. Organization/user 및 Enterprise 경로별 전환, 개인 계정 복귀, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다.
+GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. Organization/user 및 Enterprise 경로별 전환, 개인 계정 복귀, 설정·시스템 경로 제외, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다.
 
 ## License
 
