@@ -11,6 +11,10 @@ const config = {
   rules: [{ owner: 'sample-team', account: 'sample-work' }],
   enabled: true,
 };
+const enterpriseConfig = {
+  ...config,
+  rules: [...config.rules, { owner: 'enterprises/*', account: 'sample-work' }],
+};
 
 // Sanitized fixture based on GitHub's React user navigation / account menu.
 // Only the GitHub session and userscript-manager boundaries are simulated.
@@ -112,10 +116,58 @@ for (const route of ['/sample-team', '/SAMPLE-TEAM/repo', '/orgs/sample-team/pro
     assert.equal(h.clicks[0]?.account, 'sample-work');
   });
 }
-for (const route of ['/', '/sample-team-extra/repo', '/another-owner/repo', '/search?q=sample-team', '/settings/profile']) {
+for (const route of ['/', '/sample-team-extra/repo', '/another-owner/repo', '/search?q=sample-team', '/settings/profile', '/enterprises/sample-team/settings']) {
   test(`returns to the personal account: ${route}`, async t => {
     const h = setup(t, {route, current:'sample-work'}); await h.flush();
     assert.equal(h.clicks[0]?.account, 'sample-personal');
+  });
+}
+
+for (const route of ['/enterprises/', '/enterprises/sample-company', '/enterprises/another-company/settings/billing?tab=usage#details', '/ENTERPRISES/sample-company/people']) {
+  test(`matches the enterprise prefix and retains the destination: ${route}`, async t => {
+    const h = setup(t, {route, values:new Map([['settings', enterpriseConfig]])}); await h.flush();
+    assert.deepEqual(h.clicks, [{account:'sample-work', url:`https://github.com${route}`}]);
+  });
+}
+
+for (const route of ['/enterprises', '/enterprises-extra/sample-company', '/another-owner/enterprises/repo', '/search?q=/enterprises/sample-company', '/orgs/enterprises/projects/1', '/enterprises%2F*/repo', '/orgs/enterprises%2F*/projects/1']) {
+  test(`the enterprise rule does not match outside its prefix: ${route}`, async t => {
+    const h = setup(t, {route, current:'sample-work', values:new Map([['settings', enterpriseConfig]])}); await h.flush();
+    assert.equal(h.clicks[0]?.account, 'sample-personal');
+  });
+}
+
+test('the enterprise prefix rule takes priority over a legacy enterprises owner rule', async t => {
+  const h = setup(t, {route:'/enterprises/sample-company', values:new Map([['settings', {
+    ...config, rules:[{owner:'enterprises', account:'sample-work-extra'}, ...enterpriseConfig.rules],
+  }]])}); await h.flush();
+  assert.equal(h.clicks[0]?.account, 'sample-work');
+});
+
+test('adding an enterprise rule preserves existing organization rules', async t => {
+  const h = setup(t, {values:new Map([['settings', enterpriseConfig]])}); await h.flush();
+  assert.equal(h.clicks[0]?.account, 'sample-work');
+});
+
+test('client-side navigation into enterprise pages selects the configured account', async t => {
+  const h = setup(t, {route:'/', values:new Map([['settings', enterpriseConfig]])}); await h.flush();
+  await h.navigate('/enterprises/sample-company/settings');
+  assert.equal(h.clicks[0]?.account, 'sample-work');
+});
+
+test('leaving enterprise pages returns to the personal account', async t => {
+  const h = setup(t, {route:'/enterprises/sample-company', current:'sample-work', values:new Map([['settings', enterpriseConfig]])}); await h.flush();
+  assert.equal(h.clicks.length, 0);
+  await h.navigate('/');
+  assert.equal(h.clicks[0]?.account, 'sample-personal');
+});
+
+for (const route of ['/enterprises/sample-company/sso', '/enterprises/sample-company/saml/consume', '/enterprises/sample-company/oidc?return_to=settings']) {
+  test(`an enterprise rule does not interrupt authentication: ${route}`, async t => {
+    const h = setup(t, {route, values:new Map([['settings', enterpriseConfig]])}); await h.flush();
+    assert.equal(h.clicks.length, 0);
+    assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
+    assert.equal(h.document.querySelector('[data-gas-notice]'), null);
   });
 }
 
@@ -205,11 +257,30 @@ test('settings save entered mappings only in userscript-manager storage', async 
   assert.equal(h.document.cookie, '');
 });
 
+test('enterprise rules can be saved, applied immediately and reopened with existing mappings', async t => {
+  const h = setup(t, {route:'/enterprises/sample-company'}); await h.flush();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  h.document.querySelector('[name="rules"]').value += '\n ENTERPRISES/* = sample-work ';
+  h.document.querySelector('[data-gas-settings] form').dispatchEvent(new h.window.Event('submit', {cancelable:true}));
+  await h.flush();
+  assert.deepEqual(h.values.get('settings'), {...config, rules:[
+    ...config.rules, {owner:'ENTERPRISES/*', account:'sample-work'},
+  ]});
+  assert.equal(h.clicks[0]?.account, 'sample-work');
+  h.menus.get('GitHub Account Switcher: 설정')();
+  assert.equal(h.document.querySelector('[name="rules"]').value, 'sample-team = sample-work\nENTERPRISES/* = sample-work');
+});
+
 test('invalid or duplicate mappings are not saved', async t => {
   const h = setup(t, {values:new Map()}); await h.flush();
   h.menus.get('GitHub Account Switcher: 설정')();
   h.document.querySelector('[name="personal"]').value = 'sample-personal';
-  for (const rules of ['https://github.com/sample-team=sample-work', 'sample-team=sample-work\nSAMPLE-TEAM=other', 'sample-team=']) {
+  for (const rules of [
+    'https://github.com/sample-team=sample-work', 'sample-team=sample-work\nSAMPLE-TEAM=other', 'sample-team=',
+    'enterprises/*=sample-work\nENTERPRISES/*=other', 'enterprises/*=invalid/name',
+    'sample-team=enterprises/*', 'enterprises*=sample-work', 'orgs/*=sample-work',
+    'enterprises/sample-company=sample-work', 'https://github.com/enterprises/*=sample-work',
+  ]) {
     h.document.querySelector('[name="rules"]').value = rules;
     h.document.querySelector('form').dispatchEvent(new h.window.Event('submit', {cancelable:true}));
     assert.equal(h.values.has('settings'), false);

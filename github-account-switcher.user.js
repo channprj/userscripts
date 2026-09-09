@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.1.0
-// @description  Switch GitHub accounts by organization/user, with private browser-local settings.
+// @version      0.2.0
+// @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
 // @noframes
@@ -19,6 +19,7 @@
   const NAME = 'GitHub Account Switcher';
   const EMPTY = { personal: '', rules: [], enabled: true };
   const NAME_PATTERN = /^[a-z\d](?:[a-z\d_-]*[a-z\d])?$/i;
+  const ENTERPRISES_RULE = 'enterprises/*';
   const SWITCH_COOLDOWN = 30_000;
   let busy = false;
   let lastKey = '';
@@ -27,6 +28,7 @@
   const editedControls = new Set();
 
   const normalized = value => String(value ?? '').trim().toLowerCase();
+  const validRuleOwner = value => NAME_PATTERN.test(value ?? '') || normalized(value) === ENTERPRISES_RULE;
   const active = () => document.visibilityState === 'visible' && document.hasFocus();
   const login = doc => normalized(doc.querySelector('meta[name="user-login"]')?.content);
 
@@ -40,7 +42,7 @@
     if (!value || !NAME_PATTERN.test(value.personal ?? '') || !Array.isArray(value.rules)) return null;
     const owners = new Set();
     for (const rule of value.rules) {
-      if (!rule || !NAME_PATTERN.test(rule.owner ?? '') || !NAME_PATTERN.test(rule.account ?? '')) return null;
+      if (!rule || !validRuleOwner(rule.owner) || !NAME_PATTERN.test(rule.account ?? '')) return null;
       const owner = normalized(rule.owner);
       if (owners.has(owner)) return null;
       owners.add(owner);
@@ -56,9 +58,12 @@
   }
 
   function targetAccount(url, config) {
+    const enterpriseRule = /^\/enterprises\//i.test(url.pathname)
+      ? config.rules.find(rule => normalized(rule.owner) === ENTERPRISES_RULE) : null;
     const parts = url.pathname.split('/').filter(Boolean).map(part => decodeURIComponent(part));
     const owner = normalized(['orgs', 'users'].includes(parts[0]?.toLowerCase()) ? parts[1] : parts[0]);
-    return normalized(config.rules.find(rule => normalized(rule.owner) === owner)?.account ?? config.personal);
+    const ownerRule = config.rules.find(rule => normalized(rule.owner) === owner && owner !== ENTERPRISES_RULE);
+    return normalized(enterpriseRule?.account ?? ownerRule?.account ?? config.personal);
   }
 
   function notice(message) {
@@ -96,10 +101,11 @@
       <label style="display:block">기본 개인 계정 username
         <input name="personal" required autocomplete="off" spellcheck="false" style="display:block;width:100%;box-sizing:border-box;margin:6px 0 16px;padding:8px">
       </label>
-      <label style="display:block">Organization / user별 전환 규칙
+      <label style="display:block">Organization / user / Enterprise 전환 규칙
         <textarea name="rules" rows="6" autocomplete="off" spellcheck="false" style="display:block;width:100%;box-sizing:border-box;margin:6px 0;padding:8px"></textarea>
       </label>
-      <p>한 줄에 <code>organization 또는 user = 전환할 username</code>을 입력하세요. URL 대신 이름만 입력합니다. 나머지 경로에서는 개인 계정을 사용합니다.</p>
+      <p>한 줄에 <code>organization 또는 user = 전환할 username</code>을 입력하세요. URL 대신 이름만 입력합니다.</p>
+      <p><code>/enterprises/</code> 아래 모든 경로에는 <code>enterprises/* = 전환할 username</code>을 사용하세요. SSO 등 인증 화면에서는 전환을 보류하며, 규칙에 없는 경로에서는 개인 계정을 사용합니다.</p>
       <label><input type="checkbox" name="enabled"> 자동 전환 사용</label>
       <p>설정은 이 브라우저의 userscript 매니저 저장소에만 저장됩니다. 코드나 저장소 파일은 수정하지 않습니다.</p>
       <p role="alert" data-gas-error style="color:#cf222e"></p>
@@ -136,10 +142,10 @@
         if (!NAME_PATTERN.test(personal.value.trim())) throw new Error('개인 계정의 username을 확인해주세요.');
         for (const line of rules.value.split('\n').map(line => line.trim()).filter(Boolean)) {
           const pair = line.split('=').map(part => part.trim());
-          if (pair.length !== 2 || !pair.every(part => NAME_PATTERN.test(part))) {
-            throw new Error('각 규칙은 organization 또는 user = username 형식으로 입력해주세요.');
+          if (pair.length !== 2 || !validRuleOwner(pair[0]) || !NAME_PATTERN.test(pair[1])) {
+            throw new Error('각 규칙은 organization/user 이름 또는 enterprises/* = username 형식으로 입력해주세요.');
           }
-          if (seen.has(normalized(pair[0]))) throw new Error('같은 organization/user는 한 번만 입력해주세요.');
+          if (seen.has(normalized(pair[0]))) throw new Error('같은 이름이나 enterprises/* 규칙은 한 번만 입력해주세요.');
           seen.add(normalized(pair[0]));
           parsed.push({ owner: pair[0], account: pair[1] });
         }
