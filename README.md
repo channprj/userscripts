@@ -19,7 +19,7 @@
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
-| GitHub Account Switcher | Organization/user별로 계정을 자동 전환하고 나머지 경로에서는 개인 계정을 사용합니다. | 0.1.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
+| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 전환합니다. | 0.2.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
 
 ---
@@ -116,7 +116,7 @@ iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Ph
 
 [`github-account-switcher.user.js`](./github-account-switcher.user.js)
 
-GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user에 맞는 계정으로 자동 전환합니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용합니다.
+GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user 또는 Enterprise 경로에 맞는 계정으로 자동 전환합니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용합니다.
 
 1. 같은 브라우저의 GitHub에서 프로필 메뉴 → **Account switcher → Add account**로 사용할 계정들을 먼저 로그인합니다. 자세한 내용은 [GitHub 계정 전환 안내](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/switching-between-accounts)를 참고하세요.
 2. 위 **Install** 링크로 스크립트를 설치하고 GitHub 페이지를 새로고침합니다.
@@ -128,12 +128,17 @@ GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user�
 ```text
 sample-team = sample-work
 sample-user = second-work
+enterprises/* = sample-work
 ```
 
-- 왼쪽은 URL의 organization/user 이름, 오른쪽은 전환할 계정의 **username**입니다. 표시 이름이나 URL 전체를 넣지 않습니다.
+- 왼쪽은 URL의 organization/user 이름 또는 고정 규칙 `enterprises/*`, 오른쪽은 전환할 계정의 **username**입니다. 표시 이름이나 URL 전체를 넣지 않습니다.
 - `/sample-team` 및 그 아래 저장소·이슈·PR 경로, `/orgs/sample-team/...`, `/users/sample-user/...`를 인식합니다. 대소문자는 구분하지 않으며 `sample-team-extra`처럼 일부만 같은 이름은 매칭하지 않습니다.
+- `enterprises/*`는 `https://github.com/enterprises/`로 시작하는 모든 경로에 공통으로 적용합니다. 예를 들어 `/enterprises/sample-company`와 그 아래 설정·관리 페이지에서 지정한 계정으로 전환합니다. SSO·SAML·OIDC 인증 화면에서는 전환을 보류합니다.
+- `enterprises/*` 규칙은 끝에 `/`가 없는 `/enterprises`나 `/enterprises-extra/...`에는 적용되지 않습니다. 기존에 `enterprises = username` 규칙도 입력했다면 `/enterprises/` 아래에서는 `enterprises/*` 규칙을 우선합니다.
 - 설정의 초기값은 비어 있습니다. 입력한 계정명과 규칙은 `GM_setValue`를 통해 userscript 매니저 저장소에만 보관하며, 코드·설정 파일·Git 저장소에는 기록하지 않습니다. 스크립트 업데이트 후에도 설정이 유지됩니다. 매니저 자체의 백업·동기화 설정은 별도로 적용됩니다.
 - URL 직접 접근과 GitHub 내부 페이지 이동을 감지합니다. 전환 중 메뉴가 잠깐 열릴 수 있으며, 원래 방문한 주소로 돌아가는 처리는 GitHub의 기본 전환 기능을 이용합니다.
+
+기존 사용자는 스크립트를 **0.2.0 이상으로 업데이트**한 뒤, 아래 설정 메뉴에서 `enterprises/* = 사용할 username` 줄을 추가하고 저장하면 됩니다. 실제 계정명은 직접 입력하세요.
 
 #### 설정 수정·초기화
 
@@ -141,7 +146,7 @@ sample-user = second-work
 
 1. **GitHub 페이지를 연 상태에서** 브라우저의 **Tampermonkey / Violentmonkey 아이콘**을 클릭합니다.
 2. **GitHub Account Switcher: 설정**을 선택합니다.
-3. **기본 개인 계정 username**이나 **Organization / user별 전환 규칙**을 수정합니다.
+3. **기본 개인 계정 username**이나 **Organization / user / Enterprise 전환 규칙**을 수정합니다.
 4. **저장**을 누릅니다.
 
 처음 표시되는 페이지의 설정 안내를 닫았더라도, 매니저 메뉴에서 언제든 설정 화면을 다시 열 수 있습니다. 수정한 값도 userscript 매니저 저장소에만 보관되며 Git 저장소에는 기록되지 않습니다.
@@ -177,7 +182,7 @@ npm test
 npm run check
 ```
 
-GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. 경로별 전환, 개인 계정 복귀, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다.
+GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. Organization/user 및 Enterprise 경로별 전환, 개인 계정 복귀, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다.
 
 ## License
 
