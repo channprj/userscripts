@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { JSDOM, VirtualConsole } = require('jsdom');
+const { webcrypto } = require('node:crypto');
 
 const scriptPath = path.join(__dirname, '..', 'jumpcloud-login-assistant.user.js');
 const source = fs.readFileSync(scriptPath, 'utf8');
@@ -34,11 +35,22 @@ function setup(t, options = {}) {
   const originStorage = options.originStorage ?? new Map();
   const clicks = [];
   const sensitiveAccesses = [];
+  const dialogs = [];
+  const attachShadow = window.Element.prototype.attachShadow;
+  window.Element.prototype.attachShadow = function (options) {
+    const root = attachShadow.call(this, options); dialogs.push(root); return root;
+  };
+  Object.defineProperty(window, 'crypto', { value: options.crypto ?? webcrypto });
+  window.TextEncoder = TextEncoder;
+  window.TextDecoder = TextDecoder;
+  window.confirm = () => options.confirmDelete ?? true;
   const blocked = name => { sensitiveAccesses.push(name); throw new Error(`Forbidden access: ${name}`); };
   const nativeValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
   for (const name of ['value', 'defaultValue']) {
     Object.defineProperty(window.HTMLInputElement.prototype, name, {
-      configurable: true, get() { return blocked(name); }, set() { blocked(name); },
+      configurable: true,
+      get() { return options.allowCredentials && name === 'value' ? nativeValue.get.call(this) : blocked(name); },
+      set(data) { if (options.allowCredentials && name === 'value') nativeValue.set.call(this, data); else blocked(name); },
     });
   }
   const getAttribute = window.Element.prototype.getAttribute;
@@ -96,9 +108,13 @@ function setup(t, options = {}) {
   };
   window.GM_setValue = (key, data) => {
     if (options.writeFailure) throw new Error('storage unavailable');
-    assert.equal(key, 'enabled');
-    assert.equal(typeof data, 'boolean');
+    assert.ok(['enabled', 'vault'].includes(key));
+    if (key === 'enabled') assert.equal(typeof data, 'boolean');
+    else assert.deepEqual(Object.keys(data).sort(), ['ciphertext', 'iterations', 'iv', 'kdf', 'salt', 'v']);
     values.set(key, structuredClone(data));
+  };
+  window.GM_deleteValue = key => {
+    assert.equal(key, 'vault'); if (options.deleteFailure) throw new Error('storage unavailable'); values.delete(key);
   };
   window.GM_registerMenuCommand = (name, fn) => menus.set(name, fn);
   if (!options.noLocks) window.navigator.locks = options.locks ?? { request: async (_name, _options, fn) => fn({}) };
@@ -109,7 +125,20 @@ function setup(t, options = {}) {
   });
   const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
   const h = {
-    window, document, clicks, menus, values, originStorage, sensitiveAccesses, timers,
+    window, document, clicks, menus, values, originStorage, sensitiveAccesses, timers, dialogs, options,
+    get dialog() { return dialogs.at(-1); },
+    readField(name) { return nativeValue.get.call(document.querySelector(`input[name="${name}"]`)); },
+    async submitDialog(fields) {
+      const root = this.dialog;
+      for (const [name, data] of Object.entries(fields)) nativeValue.set.call(root.querySelector(`[name="${name}"]`), data);
+      root.querySelector('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+      const deadline = Date.now() + 5000;
+      while (root.host.isConnected && root.querySelector('button[type="submit"]').disabled) {
+        assert.ok(Date.now() < deadline, 'Vault operation timed out');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      await flush();
+    },
     fill(name, data, emit = true) {
       const input = document.querySelector(`input[name="${name}"]`);
       nativeValue.set.call(input, data);
@@ -389,4 +418,233 @@ test('a rejected old lock cannot stop a newly started execution', async t => {
   await h.menu('다시 시도');
   rejectOld(new Error('old request failed')); await h.advance();
   assert.deepEqual(h.clicks, ['email']);
+});
+
+const vaultInput = {
+  email: 'vault-fixture@example.test', password: 'fixture-login-password',
+  passphrase: 'fixture vault passphrase 2026', confirmation: 'fixture vault passphrase 2026',
+};
+
+async function configureVault(t, options = {}) {
+  const h = setup(t, { ...options, allowCredentials: true });
+  await h.menu('로그인 정보 설정');
+  await h.submitDialog(vaultInput);
+  assert.ok(h.values.get('vault'), 'Expected encrypted vault');
+  return h;
+}
+
+async function decryptFixture(record, passphrase = vaultInput.passphrase) {
+  const material = await webcrypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  const key = await webcrypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: Buffer.from(record.salt, 'base64'), iterations: 600000 }, material,
+    { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const bytes = await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(record.iv, 'base64'),
+    additionalData: new TextEncoder().encode('chann.jumpcloud-login-assistant.vault.v1'), tagLength: 128 }, key, Buffer.from(record.ciphertext, 'base64'));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+test('vault stores authenticated ciphertext in GM, with no plaintext or unlock key', async t => {
+  const h = await configureVault(t);
+  const record = h.values.get('vault');
+  assert.equal(record.v, 1); assert.equal(record.kdf, 'PBKDF2-SHA256'); assert.equal(record.iterations, 600000);
+  assert.equal(Buffer.from(record.salt, 'base64').length, 16);
+  assert.equal(Buffer.from(record.iv, 'base64').length, 12);
+  assert.deepEqual(await decryptFixture(record), { email: vaultInput.email, password: vaultInput.password });
+  const persisted = JSON.stringify([...h.values, ...h.originStorage]);
+  for (const data of Object.values(vaultInput)) assert.ok(!persisted.includes(data));
+  assert.deepEqual(h.clicks, []);
+  assert.equal(h.dialog.host.isConnected, false);
+});
+
+test('unlocked vault fills the configured account and password then locks after submission', async t => {
+  const h = await configureVault(t);
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  await h.advance();
+  assert.equal(h.readField('email'), vaultInput.email); assert.deepEqual(h.clicks, ['email']);
+  h.passwordStep();
+  h.document.querySelector('input[readonly]').value = vaultInput.email;
+  await h.advance();
+  assert.equal(h.readField('password'), vaultInput.password);
+  assert.deepEqual(h.clicks, ['email', 'password']);
+  await h.menu('다시 시도'); await h.advance();
+  assert.deepEqual(h.clicks, ['email', 'password']);
+});
+
+test('a locked saved vault never submits browser-autofilled credentials', async t => {
+  const stored = await configureVault(t);
+  const h = setup(t, { values: stored.values, allowCredentials: true });
+  h.fill('email', 'another@example.test'); await h.advance();
+  assert.deepEqual(h.clicks, []);
+});
+
+test('wrong passphrase or tampered ciphertext cannot unlock or change stored data', async t => {
+  const h = await configureVault(t);
+  const original = structuredClone(h.values.get('vault'));
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: 'incorrect fixture passphrase' });
+  await h.advance(); assert.deepEqual(h.clicks, []); assert.deepEqual(h.values.get('vault'), original);
+  const tampered = { ...original, ciphertext: (original.ciphertext[0] === 'A' ? 'B' : 'A') + original.ciphertext.slice(1) };
+  h.values.set('vault', tampered);
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  await h.advance(); assert.deepEqual(h.clicks, []); assert.deepEqual(h.values.get('vault'), tampered);
+});
+
+test('vault refuses to fill a password for a different or missing account', async t => {
+  const stored = await configureVault(t);
+  for (const email of ['other@example.test', '']) {
+    const h = setup(t, { values: stored.values, allowCredentials: true, html: passwordForm });
+    h.document.querySelector('input[readonly]').value = email;
+    await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase }); await h.advance();
+    assert.equal(h.readField('password'), ''); assert.deepEqual(h.clicks, []);
+  }
+});
+
+test('vault does not overwrite a different prefilled email', async t => {
+  const h = await configureVault(t); h.fill('email', 'other@example.test');
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase }); await h.advance();
+  assert.equal(h.readField('email'), 'other@example.test'); assert.deepEqual(h.clicks, []);
+});
+
+test('stop clears an injected password before submission and requires unlocking again', async t => {
+  const h = await configureVault(t);
+  h.passwordStep(); h.document.querySelector('input[readonly]').value = vaultInput.email;
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  await h.advance(500); assert.equal(h.readField('password'), vaultInput.password);
+  await h.menu('현재 페이지 중지'); assert.equal(h.readField('password'), '');
+  await h.menu('다시 시도'); await h.advance(); assert.deepEqual(h.clicks, []);
+});
+
+test('vault setup rejects weak, mismatched, or reused unlock passwords', async t => {
+  for (const change of [{ passphrase: 'short', confirmation: 'short' }, { confirmation: 'different' },
+    { passphrase: vaultInput.password, confirmation: vaultInput.password }]) {
+    const h = setup(t, { allowCredentials: true }); await h.menu('로그인 정보 설정');
+    await h.submitDialog({ ...vaultInput, ...change });
+    assert.equal(h.values.has('vault'), false); assert.deepEqual(h.clicks, []);
+  }
+});
+
+test('replacing vault data uses fresh salt and IV and preserves the old record on failure', async t => {
+  const h = await configureVault(t); const first = h.values.get('vault');
+  await h.menu('로그인 정보 설정'); await h.submitDialog(vaultInput);
+  const second = h.values.get('vault');
+  assert.notEqual(first.salt, second.salt); assert.notEqual(first.iv, second.iv); assert.notEqual(first.ciphertext, second.ciphertext);
+  assert.deepEqual(await decryptFixture(second), { email: vaultInput.email, password: vaultInput.password });
+  h.options.writeFailure = true;
+  await h.menu('로그인 정보 설정'); await h.submitDialog(vaultInput);
+  assert.deepEqual(h.values.get('vault'), second);
+});
+
+test('deleting the vault removes GM ciphertext and disables automatic login', async t => {
+  const h = await configureVault(t); await h.menu('저장 정보 삭제');
+  assert.equal(h.values.has('vault'), false); assert.equal(h.values.get('enabled'), false);
+  await h.advance(); assert.deepEqual(h.clicks, []);
+});
+
+test('hiding the page locks the vault and wipes an unsubmitted injected password', async t => {
+  const h = await configureVault(t); h.passwordStep(); h.document.querySelector('input[readonly]').value = vaultInput.email;
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  assert.equal(h.readField('password'), vaultInput.password);
+  h.activity(false); assert.equal(h.readField('password'), '');
+  h.activity(true); await h.advance(); assert.deepEqual(h.clicks, []);
+});
+
+test('vault fills an empty password even while JumpCloud disables its login button', async t => {
+  const h = await configureVault(t); h.passwordStep(); h.document.querySelector('input[readonly]').value = vaultInput.email;
+  const button = h.document.querySelector('[data-automation="loginButton"]'); button.disabled = true;
+  h.document.querySelector('input[name="password"]').addEventListener('input', () => { button.disabled = false; });
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  await h.advance(); assert.deepEqual(h.clicks, ['password']);
+});
+
+test('account changes during the stability window prevent password submission', async t => {
+  const h = await configureVault(t); h.passwordStep(); const email = h.document.querySelector('input[readonly]'); email.value = vaultInput.email;
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  await h.advance(500); email.value = 'other@example.test';
+  await h.advance(); assert.deepEqual(h.clicks, []); assert.equal(h.readField('password'), '');
+});
+
+test('locking preserves a password that the user replaced manually', async t => {
+  const h = await configureVault(t); h.passwordStep(); h.document.querySelector('input[readonly]').value = vaultInput.email;
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  h.fill('password', 'manual-fixture-password');
+  await h.advance(); assert.deepEqual(h.clicks, []); assert.equal(h.readField('password'), 'manual-fixture-password');
+});
+
+test('cancelled deletion preserves ciphertext while failed deletion still disables login', async t => {
+  const h = await configureVault(t); const original = h.values.get('vault');
+  h.options.confirmDelete = false; await h.menu('저장 정보 삭제'); assert.deepEqual(h.values.get('vault'), original);
+  h.options.confirmDelete = true; h.options.deleteFailure = true;
+  await h.menu('저장 정보 삭제');
+  assert.deepEqual(h.values.get('vault'), original); assert.equal(h.values.get('enabled'), false);
+});
+
+for (const change of [{ v: 2 }, { iterations: 1 }, { iterations: 1e12 }, { iv: 'invalid' }, { salt: 'A'.repeat(10000) }]) {
+  test(`invalid vault metadata fails closed before deriving a key: ${Object.keys(change)[0]}=${String(Object.values(change)[0]).slice(0, 20)}`, async t => {
+    let derives = 0;
+    const crypto = { subtle: { deriveKey() { derives++; throw new Error('Must not derive'); } } };
+    const record = { v: 1, kdf: 'PBKDF2-SHA256', iterations: 600000, salt: Buffer.alloc(16).toString('base64'),
+      iv: Buffer.alloc(12).toString('base64'), ciphertext: Buffer.alloc(32).toString('base64'), ...change };
+    const h = setup(t, { allowCredentials: true, crypto, values: new Map([['enabled', true], ['vault', record]]) });
+    await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+    assert.equal(derives, 0); assert.deepEqual(h.clicks, []);
+  });
+}
+
+function delayedCrypto(method) {
+  let release, completed;
+  const gate = new Promise(resolve => { release = resolve; });
+  const done = new Promise(resolve => { completed = resolve; });
+  const subtle = new Proxy(webcrypto.subtle, { get(target, key) {
+    if (key === method) return async (...args) => { await gate; const result = await target[key](...args); completed(); return result; };
+    return typeof target[key] === 'function' ? target[key].bind(target) : target[key];
+  } });
+  return { crypto: { subtle, getRandomValues: webcrypto.getRandomValues.bind(webcrypto) }, release, done };
+}
+
+for (const action of ['cancel', 'route', 'hidden']) {
+  test(`cancelling pending encryption (${action}) cannot save new data`, async t => {
+    const delayed = delayedCrypto('encrypt');
+    const h = setup(t, { allowCredentials: true, crypto: delayed.crypto });
+    await h.menu('로그인 정보 설정');
+    const pending = h.submitDialog(vaultInput);
+    if (action === 'cancel') h.dialog.querySelector('button[type="button"]').click();
+    if (action === 'route') h.navigate('/login?step=mfa');
+    if (action === 'hidden') h.activity(false);
+    delayed.release(); await delayed.done; await pending; await h.advance(0);
+    assert.equal(h.values.has('vault'), false); assert.deepEqual(h.clicks, []);
+  });
+}
+
+test('cancelling decryption cannot start a login after the dialog has closed', async t => {
+  const stored = await configureVault(t); const delayed = delayedCrypto('decrypt');
+  const h = setup(t, { allowCredentials: true, crypto: delayed.crypto, values: stored.values });
+  await h.menu('잠금 해제 후 로그인'); const pending = h.submitDialog({ passphrase: vaultInput.passphrase });
+  h.dialog.querySelector('button[type="button"]').click();
+  delayed.release(); await delayed.done; await pending; await h.advance();
+  assert.deepEqual(h.clicks, []); assert.equal(h.readField('email'), '');
+});
+
+test('changing vault ciphertext during unlock cannot activate stale credentials', async t => {
+  const stored = await configureVault(t); const delayed = delayedCrypto('decrypt');
+  const h = setup(t, { allowCredentials: true, crypto: delayed.crypto, values: stored.values });
+  await h.menu('잠금 해제 후 로그인'); const pending = h.submitDialog({ passphrase: vaultInput.passphrase });
+  h.values.delete('vault');
+  delayed.release(); await delayed.done; await pending; await h.advance();
+  assert.deepEqual(h.clicks, []); assert.equal(h.readField('email'), '');
+});
+
+test('a manual Login click keeps the filled password available to JumpCloud', async t => {
+  const h = await configureVault(t); h.passwordStep(); h.document.querySelector('input[readonly]').value = vaultInput.email;
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  let submitted;
+  const button = h.document.querySelector('[data-automation="loginButton"]');
+  button.addEventListener('click', () => { submitted = h.readField('password'); });
+  button.click(); await h.advance();
+  assert.equal(submitted, vaultInput.password); assert.deepEqual(h.clicks, ['password']);
+});
+
+test('Enter submission stops automation without clearing the submitted password', async t => {
+  const h = await configureVault(t); h.passwordStep(); h.document.querySelector('input[readonly]').value = vaultInput.email;
+  await h.menu('잠금 해제 후 로그인'); await h.submitDialog({ passphrase: vaultInput.passphrase });
+  h.document.querySelector('input[name="password"]').dispatchEvent(new h.window.KeyboardEvent('keydown', { code: 'Enter', bubbles: true }));
+  await h.advance();
+  assert.deepEqual(h.clicks, []); assert.equal(h.readField('password'), vaultInput.password);
 });
