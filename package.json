@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check github-account-switcher.user.js"
+    "check": "node --check github-account-switcher.user.js && node --check jumpcloud-login-assistant.user.js"
   },
   "devDependencies": {
     "jsdom": "30.0.1"
