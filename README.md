@@ -20,7 +20,7 @@
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 | GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 전환합니다. | 0.2.1 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
-| JumpCloud Login Assistant | ID/PW를 Tampermonkey에 보관하고 별도 잠금 암호 없이 자동 로그인합니다. | 0.3.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/jumpcloud-login-assistant.user.js) |
+| JumpCloud Login Assistant | ID/PW를 Tampermonkey에 보관하고 별도 잠금 암호 없이 자동 로그인합니다. | 0.4.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/jumpcloud-login-assistant.user.js) |
 
 
 ---
@@ -172,17 +172,19 @@ enterprises/* = sample-work
 
 [`jumpcloud-login-assistant.user.js`](./jumpcloud-login-assistant.user.js) · [보안 설계](./docs/jumpcloud-login-design.md) · [개발·검증 기록](./docs/jumpcloud-login-plan.md)
 
-`https://console.jumpcloud.com/login#/`의 **User Login**에서 저장한 이메일과 비밀번호를 입력하고 공식 로그인 버튼을 누릅니다. 별도 잠금 암호는 없습니다. 자동 진행이 켜져 있으면 새 로그인 페이지에서도 저장한 계정을 사용합니다. MFA는 직접 완료합니다.
+`https://console.jumpcloud.com/login*`의 **User Login**에서 쿼리 파라미터·해시와 관계없이 저장한 이메일과 비밀번호를 입력하고 공식 로그인 버튼을 누릅니다. 별도 잠금 암호는 없습니다. 자동 진행이 켜져 있으면 새 로그인 페이지에서도 저장한 계정을 사용합니다. MFA는 직접 완료합니다.
 
 **ID/PW는 Tampermonkey 저장소에 평문으로 보관됩니다.** 실제 ID/PW를 userscript 소스·Git에 넣지는 않지만, 저장 데이터가 유출되면 내용을 바로 읽을 수 있습니다. 로컬 저장과 암호화된 비밀번호 금고는 구분해야 합니다.
 
 #### 최초 설정과 업데이트
 
-1. Tampermonkey에서 [설치 링크](https://raw.githubusercontent.com/channprj/userscripts/main/jumpcloud-login-assistant.user.js)로 설치하거나 `0.3.0`으로 업데이트하고 로그인 화면을 새로고침합니다.
+1. Tampermonkey에서 [설치 링크](https://raw.githubusercontent.com/channprj/userscripts/main/jumpcloud-login-assistant.user.js)로 설치하거나 `0.4.0`으로 업데이트하고 로그인 화면을 새로고침합니다.
 2. 로컬 전용으로 사용하려면 Tampermonkey의 동기화·클라우드 백업을 끄고 저장 데이터를 외부로 내보내지 마세요. 스크립트는 확장 프로그램의 동기화 설정을 검사하거나 변경하지 않습니다. 브라우저 프로필·OS 백업도 사용자의 보관 정책을 따릅니다. [Tampermonkey 내보내기 안내](https://www.tampermonkey.net/faq.php?q=Q106)
 3. 정확한 JumpCloud 주소에서 Tampermonkey 메뉴 → **JumpCloud Login Assistant: 로그인 정보 설정**을 엽니다.
 4. JumpCloud 이메일·비밀번호만 입력하고 **저장 후 자동 로그인**을 누릅니다. 한 계정만 저장하며, 자동 진행도 함께 활성화합니다. 계정 정보는 이 설정 창에서 직접 입력하세요. 소스·채팅·`.env`·저장소 파일에 적지 않습니다.
 5. 로그인 탭을 활성 상태로 유지합니다. 입력과 버튼이 1초 동안 준비되면 **Continue / Login**을 한 번씩 누릅니다. MFA를 완료하고 실제 포털 진입을 확인하세요. **비밀번호 단계를 제출했습니다**라는 안내는 로그인 성공 확인이 아닙니다.
+
+**`0.3.0` 사용자는 업데이트 후 새로고침하면 기존 설정으로 동작합니다.** 최근 제출 기록에 따른 대기 제한은 없어졌으며 이전 기록을 직접 삭제할 필요가 없습니다.
 
 **`0.2.0`에서 암호화 저장한 사용자는 로그인 정보를 한 번 다시 등록해야 합니다.** 기존 암호문은 잠금 암호 없이 자동 변환할 수 없습니다. 업데이트만으로 지우지 않으며, 새 ID/PW 저장이 성공한 다음 기존 암호문을 제거합니다. 이전 암호문이 남아 있으면 외부 자동완성으로도 자동 제출하지 않습니다. 기존 설정을 모두 지우려면 **저장 정보 삭제**를 사용하세요.
 
@@ -196,17 +198,17 @@ JumpCloud의 **Remember me**나 브라우저 자동완성이 다른 계정을 �
 | **저장 정보 삭제** | 확인 후 현재 ID/PW와 이전 암호문을 삭제하고 자동 진행을 끕니다. 백업·원격 사본에는 영향을 주지 않습니다. |
 | **자동 진행 켜기/끄기** | 사용 여부를 저장하고 현재 페이지에 적용합니다. 끄더라도 저장한 ID/PW는 유지됩니다. |
 | **현재 페이지 중지** | 현재 실행을 중지합니다. 다음 새 페이지는 저장된 활성화 설정을 따릅니다. |
-| **다시 시도** | 자동 진행이 켜져 있을 때 제출 제한 기록을 초기화하고 저장한 계정으로 다시 시작합니다. |
+| **다시 시도** | 자동 진행이 켜져 있을 때 현재 페이지에서 저장한 계정으로 즉시 다시 시작합니다. |
 | **상태 안내** | 닫은 안내를 다시 표시합니다. ID/PW는 표시하지 않습니다. |
 
 페이지 안내의 **중지** 또는 `Esc`도 현재 실행을 중단합니다. **닫기**는 안내만 숨깁니다. 직접 타이핑·붙여넣기·수동 제출을 감지하면 자동화를 중지합니다. 설정 변경·삭제 후 다른 로그인 탭도 중지하거나 새로고침하세요.
 
 - 한 실행은 최대 2분 동안 기다리며 이메일·비밀번호를 각각 한 번만 자동 제출합니다.
 - 탭이 숨겨지거나 페이지를 벗어나면 현재 실행을 중지합니다. 숨겼던 페이지에서는 메뉴의 **다시 시도**로 재개합니다. 아직 제출하지 않은 스크립트 입력 비밀번호가 그대로 남아 있으면 지우며, 사용자가 바꾼 값이나 이미 제출한 값은 유지합니다.
-- 최근 10분 이내의 자동 제출 기록으로 재로드·다른 탭의 중복 제출을 제한합니다. 이메일 제출 후 비밀번호 단계는 진행할 수 있습니다. 10분이 지났다고 자동 재시도하지는 않습니다.
+- 최근 제출 시각을 저장하거나 검사하지 않습니다. 새로고침·새 탭·다시 시도에는 대기 제한이 없으며, 각 페이지는 독립적으로 진행합니다.
 - 오류/경고, 추가 인증, 지원하지 않는 폼이나 경로에서는 진행하지 않습니다.
-- 정확한 `https://console.jumpcloud.com/login` 또는 `/login/`에서 hash 없음·`#`·`#/`, query 없음 또는 `step=password`만 허용합니다. 관리자 로그인, 다른 데이터 센터, 외부 IdP, SSO/OAuth 특수 경로, 가입·재설정에는 적용하지 않습니다.
-- Web Locks 또는 로컬 저장소를 사용할 수 없으면 제출하지 않습니다.
+- 정확한 `https://console.jumpcloud.com` 출처에서 `/login`으로 시작하는 모든 경로를 대상으로 합니다. 쿼리 파라미터의 이름·개수·값과 해시는 실행 조건으로 사용하지 않습니다. 이메일·비밀번호 로그인 폼만 처리하며 MFA·가입·비밀번호 재설정 폼은 자동 제출하지 않습니다.
+- Web Locks와 페이지 localStorage에 의존하지 않습니다.
 
 #### 보안 경계와 저장 데이터
 
@@ -216,19 +218,19 @@ GitHub Account Switcher처럼 `GM_setValue` / `GM_getValue`로 코드와 설정�
 | --- | --- |
 | Tampermonkey 저장소 | `enabled` boolean과 `credentials: {email, password}` 평문. 잠금 암호·암호화 키는 없습니다. |
 | 현재 페이지 메모리·입력 필드 | 설정·로그인 중 ID/PW 원문. 완료·중지 시 스크립트 참조를 해제하지만 메모리의 완전한 소거를 보장하지 않습니다. |
-| JumpCloud 출처의 전용 localStorage 키 | `chann.jumpcloud-login-assistant.attempts.v1`에 이메일·비밀번호 단계의 제출 시각만 저장합니다. ID/PW는 없습니다. |
+| 페이지 localStorage·sessionStorage | 읽거나 쓰지 않습니다. 이전 버전의 제출 기록도 사용하지 않습니다. |
 
 주요 노출 경로는 저장 데이터나 이를 포함한 백업의 유출, 브라우저 프로필 접근, 저장 정보를 읽도록 변조된 userscript입니다. 로그인 폼에 입력된 값은 페이지 코드에서도 접근할 수 있습니다. 설정 창의 closed Shadow DOM도 보안 경계가 아닙니다. 이 기능은 OS Keychain이나 전문 암호 관리자의 암호화·사용자 인증 보호를 제공하지 않습니다.
 
 현재 코드에는 자체 네트워크 요청, 외부 라이브러리, 자격증명 로그·클립보드·파일 출력이 없습니다. 쿠키, JumpCloud 자체 저장 키, Vue 내부 상태에도 접근하지 않습니다. 인증 요청은 공식 버튼을 통해 JumpCloud 페이지가 처리합니다. 배포 코드가 변조되는 경우까지 이 속성을 보장하지는 않습니다.
 
-중지·자동 진행 끄기는 저장된 ID/PW를 삭제하지 않습니다. 삭제 메뉴도 기존 백업·원격 사본을 지우지는 않습니다. 전용 제출 기록은 페이지에서도 변경 가능한 비민감 중복 방지 데이터이며, 삭제하려면 개발자 도구에서 **해당 키만** 지우면 됩니다.
+중지·자동 진행 끄기는 저장된 ID/PW를 삭제하지 않습니다. 삭제 메뉴도 기존 백업·원격 사본을 지우지는 않습니다. 이전 버전의 `chann.jumpcloud-login-assistant.attempts.v1` 기록은 남아 있어도 자동 로그인에 영향을 주지 않습니다.
 
 로그인 정보를 등록하지 않은 경우에는 기존 외부 암호 관리자 자동완성 모드를 사용할 수 있습니다. **자동 진행 켜기/끄기**로 활성화하며, 이 모드는 입력 원문을 읽지 않고 준비 상태만 확인합니다. 형식이 잘못된 저장 정보나 이전 암호문이 있으면 자동완성 모드로 우회하지 않습니다.
 
 #### 검증 범위
 
-공개 로그인 화면의 DOM 속성과 공개 번들의 비밀번호 컴포넌트를 확인했습니다. JumpCloud 테스트 85개에서 잠금 없는 저장·새 페이지 자동 로그인, 이전 암호문 재등록, 계정 일치, 취소·삭제·저장 실패, 수동 제출, 탭 경쟁과 반복 제출 제한을 검증했습니다. 기존 기능 포함 전체 183개와 문법 검사가 통과했습니다. **실제 Tampermonkey에서 계정 등록 → 자동 입력 → MFA → 포털 진입까지의 통합 검증은 수행하지 않았습니다.**
+공개 로그인 화면의 DOM 속성과 공개 번들의 비밀번호 컴포넌트를 확인했습니다. JumpCloud 테스트 92개에서 임의 쿼리·해시, 단계 사이 URL 변경, 최근·손상된 이전 기록 무시, 새로고침·여러 탭의 독립 실행, 설정·계정 일치·중단과 실행 내 반복 클릭 방지를 검증했습니다. 기존 기능 포함 전체 190개와 문법 검사가 통과했습니다. **실제 Tampermonkey에서 계정 등록 → 자동 입력 → MFA → 포털 진입까지의 통합 검증은 수행하지 않았습니다.**
 
 ---
 
@@ -250,7 +252,7 @@ npm run check
 
 GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. Organization/user 및 Enterprise 경로별 전환, 개인 계정 복귀, 설정·시스템 경로 제외, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다.
 
-JumpCloud 스크립트 테스트는 가상 DOM과 가상 계정을 사용합니다. 저장 모드는 GM 데이터와 자동 입력을 대조하고, 외부 자동완성 모드는 입력 원문 접근을 차단해 검증합니다. 두 모드 모두 폼 직렬화, 로그, 쿠키, 네트워크, 페이지 전체 텍스트/HTML 조회를 차단합니다. Web Locks, 매니저 설정, 전용 제출 기록은 테스트 경계에서 재현하며 실제 브라우저 암호 저장소는 읽지 않습니다.
+JumpCloud 스크립트 테스트는 가상 DOM과 가상 계정을 사용합니다. 저장 모드는 GM 데이터와 자동 입력을 대조하고, 외부 자동완성 모드는 입력 원문 접근을 차단해 검증합니다. 두 모드 모두 폼 직렬화, 로그, 쿠키, 네트워크, 페이지 전체 텍스트/HTML 조회를 차단합니다. 매니저 설정은 테스트 경계에서 재현하고 Web Locks 접근과 localStorage 읽기·쓰기가 없는지 확인합니다. 실제 브라우저 암호 저장소는 읽지 않습니다.
 
 ## License
 
