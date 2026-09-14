@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JumpCloud Login Assistant
 // @namespace    https://chann.dev
-// @version      0.3.0
+// @version      0.4.0
 // @description  Store JumpCloud credentials in Tampermonkey and automatically log in.
 // @match        https://console.jumpcloud.com/login*
 // @run-at       document-idle
@@ -18,9 +18,6 @@
 
   const NAME = 'JumpCloud Login Assistant';
   const ORIGIN = 'https://console.jumpcloud.com';
-  const LOCK = 'chann.jumpcloud-login-assistant';
-  const ATTEMPTS_KEY = `${LOCK}.attempts.v1`;
-  const COOLDOWN = 10 * 60_000;
   const LIFETIME = 2 * 60_000;
   const STABLE = 1_000;
   const BUTTON = 'button[data-automation="loginButton"][type="submit"]';
@@ -33,11 +30,8 @@
   let filledPassword = null;
 
   function allowedRoute() {
-    if (window.self !== window.top || location.origin !== ORIGIN
-      || !['/login', '/login/'].includes(location.pathname)
-      || !['', '#', '#/'].includes(location.hash)) return false;
-    const params = [...new URLSearchParams(location.search)];
-    return params.length === 0 || (params.length === 1 && params[0][0] === 'step' && params[0][1] === 'password');
+    return window.self === window.top && location.origin === ORIGIN
+      && location.pathname.startsWith('/login');
   }
 
   if (!allowedRoute()) return;
@@ -234,19 +228,6 @@
     }
   }
 
-  function attempts() {
-    // Read only this script's timestamp record, never JumpCloud's account/session keys.
-    const saved = JSON.parse(localStorage.getItem(ATTEMPTS_KEY) ?? '{}');
-    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error();
-    const clean = {};
-    for (const key of Object.keys(saved)) {
-      if (!['email', 'password'].includes(key) || !Number.isFinite(saved[key]) || saved[key] <= 0) throw new Error();
-      clean[key] = saved[key];
-    }
-    return clean;
-  }
-
-  const recent = at => typeof at === 'number' && Date.now() - at < COOLDOWN;
   const same = (a, b) => a && b && a.field === b.field && a.button === b.button && a.stage === b.stage;
 
   function inspect() {
@@ -270,34 +251,18 @@
         current.ready = { ...next, since: Date.now() };
         return;
       }
-      if (current.busy || Date.now() - current.ready.since < STABLE) return;
-      current.busy = true;
-      const ready = current.ready;
-      void navigator.locks.request(LOCK, { mode: 'exclusive', ifAvailable: true }, lock => {
-        if (!lock || run !== current || current.ready !== ready) return;
-        if (!allowedRoute() || !active() || Date.now() >= current.deadline || !same(ready, candidate())
-          || document.querySelector('input[autocomplete="one-time-code"]')
-          || Array.from(document.querySelectorAll(ALERT)).some(visible)) return;
-        if (GM_getValue('enabled', false) !== true) { stop('자동 진행이 꺼져 있습니다.'); return; }
-        if (loginSession && (!accountMatches(next) || next.field.value !== loginSession[next.stage])) {
-          stop('로그인 대상이 바뀌어 중지했습니다. 내용을 직접 확인하세요.'); return;
-        }
-        const saved = attempts();
-        if (recent(saved.password) || recent(saved[next.stage])) {
-          stop('최근 제출 기록이 있어 중지했습니다. 필요하면 메뉴에서 다시 시도하세요.'); return;
-        }
-        // The origin store is shared synchronously across tabs; GM caches may lag.
-        // Commit only timestamps inside the lock, before any site side effect.
-        saved[next.stage] = Date.now();
-        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(saved));
-        current.sent.add(next.stage);
-        current.ready = null;
-        automaticClick = true;
-        try { next.button.click(); } finally { automaticClick = false; }
-        if (next.stage === 'password') stop('비밀번호 단계를 제출했습니다. 추가 인증과 로그인 결과를 직접 확인하세요.', true);
-        else if (run === current) notice('이메일 단계를 제출했습니다. 비밀번호 단계를 기다립니다.');
-      }).catch(() => { if (run === current) stop('안전한 제출 기록을 사용할 수 없어 중지했습니다.'); })
-        .finally(() => { current.busy = false; });
+      if (Date.now() - current.ready.since < STABLE) return;
+      if (GM_getValue('enabled', false) !== true) { stop('자동 진행이 꺼져 있습니다.'); return; }
+      if (loginSession && (!accountMatches(next) || next.field.value !== loginSession[next.stage])) {
+        stop('로그인 대상이 바뀌어 중지했습니다. 내용을 직접 확인하세요.'); return;
+      }
+      // Mark this stage before clicking: synchronous page events must not submit it again.
+      current.sent.add(next.stage);
+      current.ready = null;
+      automaticClick = true;
+      try { next.button.click(); } finally { automaticClick = false; }
+      if (next.stage === 'password') stop('비밀번호 단계를 제출했습니다. 추가 인증과 로그인 결과를 직접 확인하세요.', true);
+      else if (run === current) notice('이메일 단계를 제출했습니다. 비밀번호 단계를 기다립니다.');
     } catch { stop('안전한 자동 진행 조건을 확인할 수 없어 중지했습니다.'); }
   }
 
@@ -316,10 +281,8 @@
         if (!validateLogin(saved)) { stop('저장 정보 형식이 올바르지 않습니다. 메뉴에서 로그인 정보를 다시 등록하세요.'); return; }
         loginSession = { email: saved.email, password: saved.password };
       }
-      if (!navigator.locks?.request) { stop('이 브라우저에서는 안전한 중복 제출 방지 기능을 사용할 수 없습니다.'); return; }
-      if (recent(attempts().password)) { stop('최근 비밀번호 제출 기록이 있습니다. 필요하면 메뉴에서 다시 시도하세요.'); return; }
       const observer = new MutationObserver(inspect);
-      run = { observer, sent: new Set(), ready: null, busy: false, deadline: Date.now() + LIFETIME };
+      run = { observer, sent: new Set(), ready: null, deadline: Date.now() + LIFETIME };
       run.timer = setInterval(inspect, 500);
       run.expiry = setTimeout(() => stop('대기 시간이 끝났습니다. 준비 후 메뉴에서 다시 시도하세요.'), LIFETIME);
       observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
@@ -348,18 +311,7 @@
     start();
   });
   menu('현재 페이지 중지', () => stop('현재 페이지의 자동 진행을 중지했습니다.'));
-  menu('다시 시도', async () => {
-    stop();
-    if (!allowedRoute() || GM_getValue('enabled', false) !== true) { start(); return; }
-    try {
-      if (!navigator.locks?.request) { start(); return; }
-      await navigator.locks.request(LOCK, { mode: 'exclusive', ifAvailable: true }, lock => {
-        if (!lock) { notice('다른 탭에서 처리 중입니다. 잠시 후 다시 시도하세요.'); return; }
-        localStorage.setItem(ATTEMPTS_KEY, '{}');
-        start();
-      });
-    } catch { stop('제출 기록을 초기화할 수 없어 중지했습니다.'); }
-  });
+  menu('다시 시도', start);
   menu('상태 안내', () => notice(message));
 
   for (const type of ['input', 'change']) document.addEventListener(type, () => {

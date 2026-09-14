@@ -23,7 +23,7 @@ function setup(t, options = {}) {
   });
   const { window } = dom;
   const { document } = window;
-  t.after(() => { window.close(); assert.deepEqual(errors, []); assert.deepEqual(sensitiveAccesses, []); });
+  t.after(() => { window.close(); assert.deepEqual(errors, []); assert.deepEqual(sensitiveAccesses, []); assert.deepEqual(storageAccesses, []); });
   let now = 1_800_000_000_000;
   let focused = options.focused ?? true;
   let visible = options.visible ?? true;
@@ -32,6 +32,7 @@ function setup(t, options = {}) {
   const menus = new Map();
   const values = options.values ?? new Map([['enabled', options.enabled ?? true]]);
   const originStorage = options.originStorage ?? new Map();
+  const storageAccesses = [];
   const clicks = [];
   const sensitiveAccesses = [];
   const dialogs = [];
@@ -62,11 +63,15 @@ function setup(t, options = {}) {
   const attemptKey = 'chann.jumpcloud-login-assistant.attempts.v1';
   Object.defineProperty(window, 'localStorage', { value: {
     getItem(key) {
+      storageAccesses.push(['get', key]);
+      if (options.noLocalStorage) throw new Error('storage unavailable');
       assert.equal(key, attemptKey); // No access to JumpCloud's own stored account/session data.
       if (options.readFailure) throw new Error('storage unavailable');
       return originStorage.get(key) ?? null;
     },
     setItem(key, data) {
+      storageAccesses.push(['set', key]);
+      if (options.noLocalStorage) throw new Error('storage unavailable');
       assert.equal(key, attemptKey);
       if (options.writeFailure) throw new Error('storage unavailable');
       for (const [stage, at] of Object.entries(JSON.parse(data))) {
@@ -113,7 +118,7 @@ function setup(t, options = {}) {
     assert.ok(['credentials', 'vault'].includes(key)); if (options.deleteFailure) throw new Error('storage unavailable'); values.delete(key);
   };
   window.GM_registerMenuCommand = (name, fn) => menus.set(name, fn);
-  if (!options.noLocks) window.navigator.locks = options.locks ?? { request: async (_name, _options, fn) => fn({}) };
+  if (!options.noLocks) Object.defineProperty(window.navigator, 'locks', { get: () => blocked('navigator.locks') });
   document.addEventListener('click', event => {
     if (!event.target.matches('[data-automation="loginButton"]')) return;
     event.preventDefault();
@@ -220,16 +225,32 @@ for (const options of [{ focused: false }, { visible: false }]) {
 
 for (const url of [
   'http://console.jumpcloud.com/login#/', 'https://console.jumpcloud.com.evil.test/login#/',
-  'https://console.jumpcloud.com:444/login#/', 'https://console.jumpcloud.com/login-other',
-  'https://console.jumpcloud.com/admin', 'https://console.jumpcloud.com/login#/reset',
-  'https://console.jumpcloud.com/login?error=denied#/', 'https://console.jumpcloud.com/login?step=mfa#/',
-  'https://console.jumpcloud.com/login?redirectTo=https://evil.test#/',
+  'https://console.jumpcloud.com:444/login#/', 'https://console.jumpcloud.com/admin',
+  'https://console.jumpcloud.com/other/login?step=password', 'https://console.jumpcloud.com/LOGIN',
 ]) {
-  test(`does not run on unapproved URL: ${url}`, async t => {
+  test(`does not run on an origin or path outside the match: ${url}`, async t => {
     const h = setup(t, { url }); h.fill('email', 'fixture@example.test'); await h.advance();
-    assert.deepEqual(h.clicks, []);
+    assert.deepEqual(h.clicks, []); assert.equal(h.menus.size, 0);
   });
 }
+
+for (const suffix of ['', '/', '-other', '/continue?next=portal', '?error=denied#/', '?step=mfa#/',
+  '?step=password&state=opaque&redirectTo=%2Fuserconsole#/', '?step=one&step=two&empty=&flag',
+  '?redirectTo=https%3A%2F%2Fexample.test%2Fcallback&state=%E0%A4%A', '#/signin?state=opaque']) {
+  test(`automatically runs for the full login match regardless of query or hash: ${suffix || '(bare)'}`, async t => {
+    const h = savedLogin(t, { url: `https://console.jumpcloud.com/login${suffix}` });
+    await h.advance(); assert.equal(h.readField('email'), loginInput.email);
+    assert.deepEqual(h.clicks, ['email']);
+  });
+}
+
+test('query changes between email and password stages do not stop automatic login', async t => {
+  const h = savedLogin(t, { url: 'https://console.jumpcloud.com/login?state=opaque&redirectTo=%2Fuserconsole' });
+  await h.advance(); assert.deepEqual(h.clicks, ['email']);
+  h.passwordStep(); h.document.querySelector('input[readonly]').value = loginInput.email;
+  h.navigate('/login?step=password&state=changed&foo=bar#/continue');
+  await h.advance(); assert.deepEqual(h.clicks, ['email', 'password']);
+});
 
 for (const [label, html] of [
   ['multiple login forms', emailForm + emailForm],
@@ -276,54 +297,36 @@ test('rechecks the candidate after its DOM is replaced or disabled', async t => 
 test('stays stopped after leaving the login route and returning', async t => {
   const h = setup(t);
   h.fill('email', 'fixture@example.test'); await h.advance(750);
-  h.navigate('/login?step=mfa'); await h.advance();
+  h.navigate('/logout'); await h.advance();
   h.navigate('/login#/'); await h.advance();
   assert.deepEqual(h.clicks, []);
 });
 
-for (const options of [{ noLocks: true }, { readFailure: true }, { writeFailure: true }]) {
-  test(`fails closed when coordination is unavailable: ${JSON.stringify(options)}`, async t => {
-    const h = setup(t, options); h.fill('email', 'fixture@example.test'); await h.advance();
-    assert.deepEqual(h.clicks, []);
-  });
-}
-
-test('cooldown persists across reloads, but an email attempt permits the password step', async t => {
-  const first = setup(t); first.fill('email', 'fixture@example.test'); await first.advance();
-  const second = setup(t, { values: first.values, originStorage: first.originStorage });
-  second.fill('email', 'fixture@example.test'); await second.advance();
-  assert.deepEqual(second.clicks, []);
-  const password = setup(t, { values: first.values, originStorage: first.originStorage, html: passwordForm, url: 'https://console.jumpcloud.com/login?step=password#/' });
-  password.fill('password', 'fixture-only-password'); await password.advance();
-  assert.deepEqual(password.clicks, ['password']);
-  const reloaded = setup(t, { values: first.values, originStorage: first.originStorage });
-  reloaded.fill('email', 'fixture@example.test'); await reloaded.advance();
-  assert.deepEqual(reloaded.clicks, []);
-  await reloaded.menu('다시 시도'); await reloaded.advance();
-  assert.deepEqual(reloaded.clicks, ['email']);
+test('GM settings read failures still stop automatic login', async t => {
+  const h = setup(t, { readFailure: true }); h.fill('email', 'fixture@example.test'); await h.advance();
+  assert.deepEqual(h.clicks, []);
 });
 
-test('two active contexts share one attempt under the origin lock', async t => {
-  let held = false;
-  const locks = { request: async (_name, _options, callback) => {
-    if (held) return callback(null);
-    held = true;
-    try { return await callback({}); } finally { held = false; }
-  } };
-  const values = new Map([['enabled', true]]);
+test('login and retry work without Web Locks or available localStorage', async t => {
+  const h = savedPassword(t, { noLocks: true, noLocalStorage: true });
+  await h.advance(); assert.deepEqual(h.clicks, ['password']);
+  await h.menu('다시 시도'); await h.advance(); assert.deepEqual(h.clicks, ['password', 'password']);
+});
+
+test('password submission does not block a fresh page or reload', async t => {
+  const first = savedPassword(t); await first.advance(); assert.deepEqual(first.clicks, ['password']);
+  const email = savedLogin(t, { values: first.values, originStorage: first.originStorage });
+  await email.advance(); assert.deepEqual(email.clicks, ['email']);
+  const reloaded = savedPassword(t, { values: first.values, originStorage: first.originStorage });
+  await reloaded.advance(); assert.deepEqual(reloaded.clicks, ['password']);
+});
+
+test('independent tabs can each submit once without a shared cooldown', async t => {
   const originStorage = new Map();
-  const first = setup(t, { values, locks, originStorage }); const second = setup(t, { values, locks, originStorage });
-  first.fill('email', 'fixture@example.test'); second.fill('email', 'second@example.test');
+  const first = savedPassword(t, { originStorage });
+  const second = savedPassword(t, { originStorage, values: first.values });
   await Promise.all([first.advance(), second.advance()]);
-  assert.equal(first.clicks.length + second.clicks.length, 1);
-});
-
-test('duplicate prevention does not rely on immediately synchronized GM caches', async t => {
-  const originStorage = new Map();
-  const first = setup(t, { originStorage }); const second = setup(t, { originStorage });
-  first.fill('email', 'fixture@example.test'); await first.advance();
-  second.fill('email', 'second@example.test'); await second.advance();
-  assert.equal(first.clicks.length + second.clicks.length, 1);
+  assert.deepEqual(first.clicks, ['password']); assert.deepEqual(second.clicks, ['password']);
 });
 
 test('stop, disable and Escape cancel pending work', async t => {
@@ -348,16 +351,12 @@ test('the execution expires and cannot submit when autofill arrives later', asyn
   assert.equal(h.timers.size, 0);
 });
 
-test('a late MFA challenge cancels a pending lock callback before any click', async t => {
-  let release;
-  const locks = { request: (_name, _options, callback) => new Promise(resolve => {
-    release = () => resolve(callback({}));
-  }) };
-  const h = setup(t, { locks }); h.fill('email', 'fixture@example.test'); await h.advance();
+test('MFA appearing during the stability window stops submission on any query', async t => {
+  const h = savedLogin(t, { url: 'https://console.jumpcloud.com/login?step=mfa&state=opaque' });
+  await h.advance(500);
   const otp = h.document.createElement('input'); otp.autocomplete = 'one-time-code';
   h.document.body.append(otp);
-  release(); await h.advance(0);
-  assert.deepEqual(h.clicks, []);
+  await h.advance(); assert.deepEqual(h.clicks, []);
 });
 
 test('retry handles storage rejection without an unhandled promise', async t => {
@@ -368,11 +367,13 @@ test('retry handles storage rejection without an unhandled promise', async t => 
   assert.deepEqual(h.clicks, []);
 });
 
-for (const record of ['broken json', 'null', '[]', '{"email":"yesterday"}', '{"unexpected":1}']) {
-  test(`invalid cooldown data fails closed: ${record}`, async t => {
+for (const record of ['broken json', 'null', '[]', '{"email":"yesterday"}', '{"unexpected":1}',
+  '{"password":1800000000000}', '{"password":1800000100000}']) {
+  test(`legacy submission records never block login: ${record}`, async t => {
     const originStorage = new Map([['chann.jumpcloud-login-assistant.attempts.v1', record]]);
-    const h = setup(t, { originStorage }); h.fill('email', 'fixture@example.test'); await h.advance();
-    assert.deepEqual(h.clicks, []);
+    const h = savedPassword(t, { originStorage }); await h.advance();
+    assert.deepEqual(h.clicks, ['password']);
+    assert.equal(originStorage.get('chann.jumpcloud-login-assistant.attempts.v1'), record);
   });
 }
 
@@ -390,25 +391,15 @@ test('new input events reset the stability window before submitting', async t =>
   await h.advance(750); assert.deepEqual(h.clicks, ['email']);
 });
 
-test('expired timestamps permit a new execution while future timestamps fail closed', async t => {
-  for (const [at, expected] of [[1_799_999_399_999, ['email']], [1_800_000_100_000, []]]) {
-    const originStorage = new Map([['chann.jumpcloud-login-assistant.attempts.v1', JSON.stringify({ password: at })]]);
-    const h = setup(t, { originStorage }); h.fill('email', 'fixture@example.test'); await h.advance();
-    assert.deepEqual(h.clicks, expected);
+test('repeated events and query changes never resubmit a stage in the same execution', async t => {
+  const h = savedLogin(t); await h.advance();
+  for (let i = 0; i < 4; i++) {
+    h.fill('email', loginInput.email);
+    h.navigate(`/login?state=${i}#/signin`);
+    await h.advance();
   }
-});
-
-test('a rejected old lock cannot stop a newly started execution', async t => {
-  let rejectOld;
-  let requests = 0;
-  const locks = { request: (_name, _options, callback) => {
-    if (++requests === 1) return new Promise((_resolve, reject) => { rejectOld = reject; });
-    return Promise.resolve(callback({}));
-  } };
-  const h = setup(t, { locks }); h.fill('email', 'fixture@example.test'); await h.advance();
-  await h.menu('다시 시도');
-  rejectOld(new Error('old request failed')); await h.advance();
   assert.deepEqual(h.clicks, ['email']);
+  await h.menu('다시 시도'); await h.advance(); assert.deepEqual(h.clicks, ['email', 'email']);
 });
 
 const loginInput = { email: 'stored-fixture@example.test', password: 'fixture-login-password' };
@@ -556,7 +547,7 @@ for (const action of ['cancel', 'route', 'hidden']) {
   test(`closed settings cannot save or start login: ${action}`, async t => {
     const h = setup(t, { allowCredentials: true, enabled: false }); await h.menu('로그인 정보 설정');
     if (action === 'cancel') h.dialog.querySelector('button[type="button"]').click();
-    if (action === 'route') h.navigate('/login?step=mfa');
+    if (action === 'route') h.navigate('/logout');
     if (action === 'hidden') h.activity(false);
     await h.submitDialog(loginInput); await h.advance();
     assert.equal(h.values.has('credentials'), false); assert.deepEqual(h.clicks, []);
