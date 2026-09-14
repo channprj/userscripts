@@ -1,70 +1,73 @@
-# JumpCloud Login Implementation Plan
+# JumpCloud Login Assistant 0.2.0 구현·검증 기록
 
-**Goal:** 로컬 암호 관리자가 입력한 JumpCloud 로그인 폼을 ID/PW 원문 접근 없이 진행한다.
+**목표:** ID/PW를 소스·Git에 넣지 않고 Tampermonkey 저장소에 암호화해 보관한다. 별도의 잠금 암호를 입력하면 현재 페이지에서 이메일·비밀번호 단계를 자동 진행한다.
 
-**Architecture:** 암호 관리자가 보관과 자동 입력을 소유한다. 단일 userscript가 공개 DOM 상태만 관찰하고, 중복 방지 기록 후 기존 로그인 버튼을 누른다. 테스트는 기존 Node.js/jsdom 환경을 사용한다.
+**설계:** [보안·동작 설계](jumpcloud-login-design.md). JavaScript userscript, Tampermonkey GM API, 내장 Web Crypto, Web Locks, 전용 제출 시각 저장소를 사용한다. MFA는 직접 완료한다. 잠금 암호와 키는 저장하지 않는다.
 
-**Tech Stack:** JavaScript userscript, GM boolean settings/menu API, Web Locks, origin-local timestamp storage, Node.js test runner, jsdom 30.0.1.
+**환경:** Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`, jsdom 30.0.1, 신규 의존성 없음. 확인 환경은 Node.js 26.8.1이다.
 
-**Spec:** [보안 및 동작 설계](jumpcloud-login-design.md)
+## 완료 기준
 
-## Global Constraints
+- [x] 실제 ID/PW와 잠금 암호가 소스·Git·로그·Web Storage에 기록되지 않는다.
+- [x] GM에는 활성화 boolean과 암호문·공개 암호화 메타데이터만 저장한다.
+- [x] 잠금 암호를 저장하지 않고 새 페이지마다 잠금 해제를 요구한다.
+- [x] 저장 계정과 화면 계정이 일치할 때만 비밀번호를 입력하며 수동 값을 덮어쓰지 않는다.
+- [x] 잘못된 암호·암호문 손상·지원하지 않는 저장 형식은 제출로 이어지지 않는다.
+- [x] 취소·숨김·경로 이탈 중 끝난 비동기 연산이 저장이나 로그인을 재개하지 않는다.
+- [x] 자동화 중지 시 원문 참조를 해제하고 아직 제출하지 않은 스크립트 입력 비밀번호를 정리한다.
+- [x] MFA·알림·비정상 폼·반복 제출에서 진행을 제한한다.
+- [x] 설치·설정·잠금 해제·변경·삭제와 보안 한계를 문서화한다.
 
-- 입력 원문, 이벤트 데이터, 폼 직렬화, 인증 API, 쿠키에 접근하지 않는다.
-- ID/PW는 사용자가 로컬 암호 관리자에서 직접 설정한다.
-- MFA와 `/login` 밖의 인증 흐름은 자동화하지 않는다.
-- 자동 진행은 초기 비활성화, 활성 탭에서만 실행한다.
-- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`, 신규 의존성 없음.
-- 사용자 요청 `gcpr`에 따라 현재 main에서 명시적 파일 staging 후 일반 push. 작업 전 변경 없음, origin/main과 0/0 동기화 확인.
+## 체크포인트 1: 암호화 저장과 로그인
 
-## Checkpoint 1: 설계 계약
+**파일:** `jumpcloud-login-assistant.user.js`, `test/jumpcloud-login-assistant.test.js`.
 
-- [x] 공개 페이지에서 값 없는 DOM 속성 확인 및 공개 번들로 password 단계 확인.
-- [x] 보관 대안, 보안 경계, 실패 조건, 검증 범위를 spec에 기록.
-- [x] 문서의 모순/불명확한 범위/미정 사항 점검.
-- [x] `git diff --check` 후 두 설계 문서를 `docs(jumpcloud): define credential-free login automation`으로 커밋·푸시하고 upstream 0/0 확인.
+- [x] 공식 Tampermonkey 저장·내보내기 문서와 Web Crypto·OWASP 지침을 확인한다.
+- [x] 평문 GM 저장과 암호화 키 동시 저장을 제외하고 사용자 잠금 암호를 선택한다.
+- [x] 메뉴 미구현으로 핵심 테스트가 실패하는 것을 확인한 뒤 기능을 구현한다.
+- [x] AES-GCM-256, PBKDF2-SHA256 600,000회, salt 16바이트, IV 12바이트, 태그 128비트와 고정 AAD를 구현한다.
+- [x] 저장·잠금 해제·삭제 UI, 입력 검증, 형식 검증과 비동기 취소 검사를 추가한다.
+- [x] native setter와 입력 이벤트로 Vue 폼에 전달하고 계정 일치를 제출 직전에도 검사한다.
+- [x] 저장된 암호문이 잠겨 있을 때 외부 자동완성으로 제출되지 않게 한다.
+- [x] 수동 Login과 Enter 시 비밀번호를 먼저 지우는 회귀를 실패 재현 후 수정한다.
+- [x] 전체 테스트·문법·공백 검사 및 diff 검토를 완료한다.
+- [x] `6f4c986 feat(jumpcloud): add encrypted Tampermonkey login vault`로 커밋·일반 push 후 upstream 0/0을 확인한다.
 
-## Checkpoint 2: 진행 기능과 보안 테스트
+## 체크포인트 2: 사용·보안 문서
 
-**Files:** `jumpcloud-login-assistant.user.js`, `test/jumpcloud-login-assistant.test.js`, `package.json`.
+**파일:** `README.md`, `docs/jumpcloud-login-design.md`, 이 문서.
 
-**Interfaces:** GM에는 `enabled: boolean`만 저장한다. origin의 `chann.jumpcloud-login-assistant.attempts.v1` 키에는 `{email?: number, password?: number}` 제출 시각만 JSON으로 저장한다. `button[data-automation="loginButton"]`의 소유 form에서 `email` 또는 `password` required 입력 하나를 찾는다. 외부 export/API/설정 파일은 만들지 않는다.
+- [x] 설치 표와 안내를 `0.2.0`으로 갱신한다.
+- [x] Tampermonkey 메뉴에서 사용자만 실제 정보를 입력하는 절차를 설명한다.
+- [x] 매 페이지 잠금 해제, 한 계정 저장, 설정 교체, 분실 시 재등록, 삭제와 재시도 절차를 명시한다.
+- [x] GM 저장소 암호화와 런타임 원문 처리의 차이, Shadow DOM·메모리 소거의 한계를 명시한다.
+- [x] 로컬 전용 동기화·백업 설정은 사용자가 관리해야 함을 설명한다.
+- [x] 코드와 문서의 메뉴·설정 키·제한·테스트 수를 대조한다.
 
-- [x] 테스트 harness에서 실제 script를 평가하고 `click`의 단계만 수집한다. window 타이머와 `Date.now()`를 가상 시계로, Web Locks/GM/전용 제출 기록만 외부 경계로 대체한다. input의 원문 getter는 예외를 발생시키되 DOM의 실제 validity 검사는 유지한다.
-- [x] 아래 핵심 assertion이 미구현 상태에서 실패함을 확인한다.
+문서 검토와 `git diff --check` 후 `docs(jumpcloud): explain encrypted vault setup and unlocking`으로 커밋·일반 push한다. 최종 커밋과 깨끗한 작업 트리·upstream 동기화 결과는 최종 응답에 기록한다.
 
-  ```js
-  const h = setup(t, { enabled: true });
-  h.fill('email', 'fixture@example.test');
-  await h.advance(1500);
-  assert.deepEqual(h.clicks, ['email']);
-  h.passwordStep();
-  h.fill('password', 'fixture-only-password');
-  await h.advance(1500);
-  assert.deepEqual(h.clicks, ['email', 'password']);
-  assert.deepEqual(h.sensitiveAccesses, []);
-  ```
+## 검증 증거
 
-- [x] strict route/form selector, validity 안정화, static notice/메뉴, 실행 수명, 수동 입력 중단, lock+cooldown 순서로 구현한다. 재평가 시 부적합 조건이 하나라도 있으면 클릭하지 않는다.
-- [x] spec 검증 목록을 표 기반 실패 테스트로 확장하고 보안 회귀를 통과시킨다. source 텍스트 검색만으로 보안 통과를 주장하지 않는다. 58개 JumpCloud 테스트에서 원문 접근 차단 및 다중 탭/비동기 중단 조건을 검증했다.
-- [x] `package.json`의 check 명령에 새 userscript의 `node --check`를 추가한다.
-- [x] `node --test test/jumpcloud-login-assistant.test.js`, `npm test`, `npm run check`, `git diff --check`를 실행한다.
-- [x] diff 전체 및 실제 자격증명 유입 여부 검토 후 `feat(jumpcloud): advance login without reading credentials` 커밋·푸시, upstream 0/0 확인.
+| 검사 | 결과 |
+| --- | --- |
+| JumpCloud 테스트 | 85개 통과. 기존 외부 자동완성 58개와 저장·잠금 해제 관련 27개. |
+| 전체 `npm test` | 183/183 통과. 기존 GitHub 기능의 회귀 없음. |
+| `npm run check` | 두 userscript의 Node.js 문법 검사 통과. |
+| `git diff --check` | 공백 오류 없음. |
+| 문서 로컬 링크 | 10개 대상 파일 존재 확인. |
+| 설치 링크 | GitHub raw 배포 파일과 로컬 userscript의 바이트 일치 확인. |
+| 실제 데이터 | `.test` 가상 계정만 사용. 실제 자격증명을 조회하거나 파일에 저장하지 않음. |
+| 실제 계정 E2E | 미실행. Tampermonkey 등록 → 잠금 해제 → MFA → 포털 진입은 최초 설치 후 확인 필요. |
 
-## Checkpoint 3: 설치·운영 안내
+암호문은 테스트에서 구현 함수와 별도로 복호화해 원본 가상 계정과 대조했다. GM·전용 localStorage에 저장된 모든 값에 ID/PW·잠금 암호가 포함되지 않는지 확인했다. 잘못된 암호, 암호문 변조, 비정상 작업량·IV·salt, 저장·삭제 실패, 취소 중 완료, 잠금 해제 중 저장 변경을 검증했다. 수동 제출 전 비밀번호가 보존되고 중지 시 미제출 비밀번호가 정리되는지도 확인했다.
 
-**Files:** `README.md`, `docs/jumpcloud-login-design.md`, 이 계획 문서.
+## 이전 발행과 변경 범위
 
-- [x] 설치 표에 버전 `0.1.0` 및 `https://raw.githubusercontent.com/channprj/userscripts/main/jumpcloud-login-assistant.user.js`를 추가한다.
-- [x] 로컬 보관 설정, 사용자 직접 저장, 자동완성 후 활성화, MFA 완료, 중지/재시도/삭제 절차를 설명한다.
-- [x] 클라우드 동기화와 암호 관리자별 입력 방식 차이, DOM 비밀 격리 한계, 실제 계정 E2E 미실행을 명시한다.
-- [x] 실제 코드와 문서의 설정 키/메뉴/제한을 대조하고 계획의 완료 체크를 갱신한다.
+초기 `0.1.0`은 외부 암호 관리자 자동완성을 원문 접근 없이 진행하는 기능이었다. 사용자가 GitHub Account Switcher의 Tampermonkey 저장 방식을 요청하고 암호화 저장·잠금 해제 방식에 동의해 `0.2.0`으로 확장했다. 현재 보안 계약은 위 설계를 따른다.
 
-최종 문서 commit은 `docs(jumpcloud): explain local vault setup and login controls`로 발행한다. 문서 검토와 `git diff --check`를 거친 뒤 일반 push 및 upstream 0/0 확인 결과를 최종 응답에 기록한다.
+- `65b7336`: 초기 설계 문서.
+- `6fddc35`: 외부 자동완성 진행 기능. 당시 전체 156개 테스트 통과.
+- `250b8f2`: 초기 사용 안내. 이번 변경 시작 시 main과 origin/main이 0/0이고 작업 트리가 깨끗했음.
+- `6f4c986`: 암호화 GM 저장과 잠금 해제 후 로그인. 전체 183개 테스트 통과 후 푸시 완료.
 
-## 검증 기록
-
-- `65b7336`: 설계 문서 검토, 공백 검사 후 푸시 완료.
-- `6fddc35`: 전체 `npm test` 156/156, `npm run check`, `git diff --check` 통과 후 푸시 완료.
-- 핵심 기능 미구현 시 실패를 확인했고, GM 캐시 지연·늦은 MFA·재시도 저장 오류도 실패 재현 후 수정했다.
-- 실제 로그인 페이지에서 값 없는 DOM 계약을 확인했다. 실제 ID/PW, 암호 저장소 및 인증 세션은 조회·변경하지 않았으며 실제 계정 E2E는 실행하지 않았다.
+사용자의 `gcpr` 요청에 따라 기존 main에서 해당 파일만 명시적으로 stage하고 검증된 체크포인트별로 일반 push한다. force push나 다른 파일 변경은 하지 않는다. 브라우저 설치·동기화 설정은 변경하지 않았고 실제 로그인도 수행하지 않았다.

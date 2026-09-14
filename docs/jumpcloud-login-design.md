@@ -1,67 +1,89 @@
-# JumpCloud 로그인 자동 진행 설계
+# JumpCloud Login Assistant 0.2.0 설계
 
-## 목표와 범위
+## 목표와 보안 계약
 
-`https://console.jumpcloud.com/login#/`의 이메일 → 비밀번호 단계를 자동으로 진행한다. ID/PW는 사용자가 선택한 로컬 암호 저장소에서 관리한다. userscript에는 ID/PW 입력 UI, 원문, 암호문, 암호화 키, 계정 식별자 설정이 없다. MFA는 사용자가 완료한다.
+`https://console.jumpcloud.com/login#/`의 User Login에서 로컬에 저장한 계정으로 이메일 → 비밀번호 단계를 진행한다. 사용자와 확인한 요구사항은 **실제 ID/PW를 userscript 소스·Git에 포함하지 않고, Tampermonkey 저장소에 암호화해 보관하는 것**이다. 설정과 로그인 시 userscript 런타임이 원문을 일시적으로 처리하며, 새 페이지에서는 사용자가 별도의 잠금 암호를 입력한다. MFA는 직접 완료한다.
 
-대상은 현재 URL의 User Login이다. Administrator Login, 외부 IdP, 비밀번호 재설정, 가입, MFA 등록, SSO/OAuth 특수 경로는 자동화하지 않는다. 기존 userscript에는 변경을 가하지 않는다. 초기 상태는 비활성화이며 암호 관리자 설정 후 매니저 메뉴에서 활성화한다.
+기본 상태는 비활성화이며 한 계정만 저장한다. 관리자 로그인, 외부 IdP, 비밀번호 재설정, 가입, MFA 등록, 다른 데이터 센터나 SSO/OAuth 특수 경로는 범위 밖이다. GitHub Account Switcher와 기존 userscript의 동작은 변경하지 않는다.
 
-## 보안 계약
+- ID/PW는 하나의 암호문으로 저장한다. 저장소에 평문 계정 식별자, 비밀번호, 잠금 암호, 복호화 키를 남기지 않는다.
+- 잠금 암호는 코드나 저장된 설정에서 얻지 않고 매번 사용자에게 받는다. 자동 잠금 해제·영구 키 저장은 제공하지 않는다.
+- 자체 인증 API 호출, 쿠키·토큰 조회, 원문 로그, 클립보드·파일 출력, 외부 라이브러리와 자체 네트워크 요청은 없다. 공식 로그인 버튼을 눌러 JumpCloud가 인증 요청을 처리한다.
+- 암호문을 훔친 공격자에 대한 저장 시 보호가 목적이다. 약한 잠금 암호에 대한 오프라인 추측은 막을 수 없으므로 긴 별도 암호를 사용한다.
+- 사용 중인 페이지·브라우저·확장 프로그램·userscript가 침해되면 입력 중이거나 복호화된 원문을 보호할 수 없다. closed Shadow DOM은 페이지 폼과의 우발적 충돌을 줄이는 장치이며 보안 경계가 아니다.
+- 바이트 버퍼는 가능한 범위에서 덮어쓰고 문자열 참조를 해제한다. JavaScript GC, 브라우저 폼, 페이지 모델, 메모리 덤프에서 완전한 원문 소거를 보장하지 않는다.
+- Tampermonkey의 동기화·내보내기와 OS/프로필 백업 정책은 이 스크립트가 강제하지 못한다. 로컬 전용 사용자는 동기화·클라우드 백업을 끄고 외부 내보내기를 피해야 한다. 삭제 메뉴도 기존 백업이나 다른 탭의 메모리까지 삭제하지 않는다.
 
-- userscript는 입력 컨트롤의 `value`, `defaultValue`, `value` 속성, 폼 직렬화, 이벤트의 입력 데이터, 페이지 전체 텍스트/HTML, Vue 상태를 읽거나 쓰지 않는다.
-- ID/PW를 네트워크, 로그, 클립보드, 파일, GM 저장소, Web Storage에 복사하지 않는다. 자체 네트워크 요청과 외부 라이브러리가 없다.
-- 필요한 값은 필드 종류, 이름, required/validity, 활성/표시 상태와 공식 로그인 버튼의 식별자뿐이다. 문자열 원문 없이 입력 완료 여부만 판정한다.
-- GM 저장소에는 활성화 boolean만 저장한다. JumpCloud origin의 localStorage 전용 키 `chann.jumpcloud-login-assistant.attempts.v1`에는 단계별 제출 시각만 저장한다. 계정, URL, 쿠키, 토큰은 기록하지 않으며 JumpCloud 자체의 저장 키를 읽지 않는다. 제출 기록은 페이지에서도 변경 가능한 비민감 데이터로, 침해된 페이지에 대한 인증 방어 수단이 아니다.
-- 로그인 제출은 JumpCloud의 기존 버튼 `click()`을 통해 JumpCloud가 수행한다. 인증 API, 쿠키, CSRF, MFA 처리에 개입하지 않는다.
-- 이 계약은 **이 스크립트가 비밀번호를 취급하지 않는다**는 보장이다. DOM에 자동 입력된 값을 페이지 코드, 다른 확장 프로그램, 변조된 userscript가 읽을 수 없다는 접근 통제는 아니다. 그러한 절대 격리가 필요하면 비밀번호 폼 자동화 대신 조직에서 지원하는 패스키/JumpCloud Go가 필요하다.
-- 브라우저와 암호 관리자의 잠금, 암호화, 동기화 정책은 해당 제품의 책임이다. 스크립트가 로컬 보관 여부를 검사하거나 강제하지 않는다. 로컬 전용 요구사항을 만족하려면 클라우드 저장/동기화를 사용하지 않는 구성을 사용자가 선택해야 한다.
+## 저장 방식 선택
 
-## 대안 비교
+| 방식 | 판단 |
+| --- | --- |
+| GM 저장소 평문 | 소스에서는 분리되지만 저장소에서 ID/PW를 바로 읽을 수 있으므로 사용하지 않는다. |
+| GM 저장소 암호문 + 사용자 잠금 암호 | 채택. 기존 Tampermonkey 저장 API를 사용하고 키를 저장하지 않는다. 로그인마다 잠금 해제가 필요하다. |
+| 암호문과 복호화 키를 함께 저장 | 암호문 탈취 시 보호 효과가 없으므로 사용하지 않는다. |
+| OS Keychain + 로컬 서버 | 별도 프로세스·권한·전송 경로가 필요하므로 현재 범위에서 제외한다. |
+| 외부 암호 관리자 자동완성 | 저장 정보를 등록하지 않은 경우에만 기존 진행 기능을 유지한다. 이 모드는 원문을 읽지 않는다. |
 
-| 방식 | 자격증명 경로 | 판단 |
-| --- | --- | --- |
-| 로컬 암호 관리자 + 진행 전용 userscript | 저장소 → 브라우저/암호 관리자 → JumpCloud 폼 | 채택. 새 자격증명 보관/전송 시스템이 필요 없다. |
-| macOS Keychain + 로컬 서버 | Keychain → 로컬 HTTP → userscript → 폼 | 배제. 원문이 userscript 런타임에 전달되고 로컬 서버 인증/허용 출처 관리가 필요하다. |
-| GM 저장소 암호화 | 암호문/복호화 키 → userscript → 폼 | 배제. 키 관리가 추가되며 스크립트가 원문을 다룬다. |
+GitHub Account Switcher와 동일한 `GM_getValue` / `GM_setValue`로 코드와 설정을 분리하되, 비밀 데이터에는 별도 암호화를 추가한다. Tampermonkey 자체를 OS Keychain이나 전문 암호 관리자와 동일한 보안 금고라고 가정하지 않는다. GM 값은 스크립트별 저장 데이터이며 사용자가 Storage 탭에서 조회·편집할 수 있다. [저장 API](https://www.tampermonkey.net/documentation.php?locale=en&q=GM_values), [Storage 탭](https://www.tampermonkey.net/faq.php?q=Q400)
 
-## 확인한 외부 인터페이스
+## 암호문과 키 수명
 
-2026-09-14 실제 공개 페이지와 공개 로그인 번들 v0.232.0을 조회했다. 실제 로그인과 사용자 자격증명 조회는 하지 않았다.
+GM 저장 키는 `enabled: boolean`과 `vault` 두 개다. `vault`는 아래 여섯 필드만 가진다. `salt`, `iv`, `ciphertext`는 Base64 문자열이며 버전과 KDF 파라미터는 공개 메타데이터다.
 
-- User Login 이메일 필드: `input[name="email"][type="email"][required]`, `autocomplete="on"`, 폼 method POST.
-- 공식 진행 버튼: `button[data-automation="loginButton"][type="submit"]`.
-- UserPasswordEntry 공개 컴포넌트: `input[name="password"][type="password"][required]`, 비밀번호가 없으면 버튼 disabled. 같은 폼에 숨겨진 readonly 이메일 필드가 존재한다.
-- Vue 컴포넌트가 입력과 전환을 소유한다. 사용자가 직접 입력하면 자동 진행을 중단하고, 암호 관리자 입력은 안정화 시간을 거친다. `:autofill`만 필수 조건으로 사용하면 일부 외부 암호 관리자의 입력을 감지하지 못하므로 required 필드의 브라우저 유효성 boolean과 버튼 상태를 사용한다.
-- 직접 관찰하지 못한 비밀번호 이후 단계와 암호 관리자별 실제 자동완성은 사용자의 로컬 수동 검증이 필요하다.
+```json
+{
+  "v": 1,
+  "kdf": "PBKDF2-SHA256",
+  "iterations": 600000,
+  "salt": "<16 random bytes, Base64>",
+  "iv": "<12 random bytes, Base64>",
+  "ciphertext": "<encrypted JSON and authentication tag, Base64>"
+}
+```
 
-## 동작과 상태
+암호화할 평문은 `{email, password}`다. Web Crypto의 PBKDF2-HMAC-SHA256을 600,000회 적용해 AES-GCM 256비트 키를 유도한다. 저장마다 `crypto.getRandomValues`로 새 16바이트 salt와 12바이트 IV를 만든다. GCM 인증 태그는 128비트이며 AAD는 `chann.jumpcloud-login-assistant.vault.v1`로 고정한다. 유도한 CryptoKey는 `extractable: false`이고 저장하지 않는다.
 
-1. 정확한 HTTPS origin, `/login` 또는 `/login/`, 최상위 프레임을 확인한다. 알려진 빈 hash와 `#/`만 허용한다. query는 없거나 `step=password`만 허용한다. 그 외 인증 흐름에서는 중단한다.
-2. 초기 안내에서 자격증명을 받지 않는다. 매니저 메뉴로 활성화/비활성화, 현재 페이지 중지, 명시적 다시 시도, 상태 안내를 제공한다.
-3. 활성 탭이며 document에 포커스가 있는 동안만 감시한다. 한 실행은 2분 뒤 종료된다. MutationObserver와 500ms polling은 입력값 변경 이벤트가 없는 자동완성도 감지한다.
-4. 표시되고 활성화된 공식 버튼이 정확히 하나이고, 같은 폼의 편집 가능한 필드가 이메일 하나 또는 비밀번호 하나인 경우만 허용한다. 비밀번호 화면의 숨겨진 readonly 이메일은 읽지 않는다. 추가 OTP, 새 비밀번호, 두 번째 폼, 알 수 없는 필드, 외부 form action, 다른 submit target은 거부한다.
-5. required 입력 필드의 native validity가 유효하고 버튼이 활성화된 상태가 1초 유지되면 다음 단계로 진행한다. `input`/`change` 이벤트 발생 시 안정화 시간을 다시 계산하지만 이벤트 데이터는 읽지 않는다.
-6. 직접 타이핑, 붙여넣기, composition, 수동 로그인 버튼 제출 시 이번 실행을 중단한다. 메뉴의 다시 시도로만 재개한다. 자동완성이 문자를 입력하는 방식의 도구는 수동 입력으로 취급될 수 있다.
-7. Web Locks의 origin 단위 exclusive lock 안에서 상태를 다시 확인하고 전용 localStorage 제출 시각을 먼저 기록한 다음 클릭한다. 매니저별 GM 캐시의 탭 간 동기화 시점에 의존하지 않는다. lock API, GM 설정 읽기, 제출 기록 저장에 실패하면 제출하지 않는다.
-8. 이메일·비밀번호는 실행당 각각 한 번만 제출한다. 마지막 자동 비밀번호 제출 후 10분 동안 새 실행/다른 탭도 자동 진행을 제한한다. 이메일 제출도 10분 동안 중복하지 않되 이후 비밀번호 단계는 진행할 수 있다. 시간 경과가 자동 재시도를 일으키지는 않는다. 다시 시도는 사용자의 명시적 초기화다.
-9. 로그인 경로 이탈, visible 오류/경고, MFA 필드, Escape, 사용자 입력, 시간 초과에서 observer/timer를 해제하고 정적 상태만 표시한다. 비밀번호 제출 직후도 자동화를 종료한다. 로그인 성공했다고 추정하지 않는다.
+PBKDF2는 브라우저 내장 API만으로 구현할 수 있어 선택했다. 600,000회는 OWASP의 PBKDF2-HMAC-SHA256 지침을 참고한 값이며, 이 구현의 별도 보안 감사나 인증을 의미하지 않는다. GCM은 암호문 변조를 검출하지만 정상적인 과거 암호문으로의 교체까지 구분하지는 못한다. [OWASP 지침](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html), [Web Crypto 키 유도](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/deriveKey), [AES-GCM 파라미터](https://developer.mozilla.org/en-US/docs/Web/API/AesGcmParams)
 
-## 검증
+1. 설정 창에서 이메일·비밀번호와 별도 잠금 암호·확인을 입력한다. 잠금 암호는 12~1024자, 비밀번호는 1~1024자, 이메일은 최대 254자다. 이메일 형식, 잠금 암호 확인, JumpCloud 비밀번호와의 차이를 검사한다.
+2. 비동기 암호화 전에 입력란을 비운다. 암호화가 끝나면 창이 여전히 유효하고 허용된 경로·표시된 페이지인지 다시 확인한 뒤 암호문만 한 번 저장한다. 저장 실패 시 기존 기록을 삭제하지 않는다. 저장만으로 로그인을 시작하지 않는다.
+3. 잠금 해제 시 저장 형식·버전·고정 KDF 작업량·Base64 길이를 먼저 검사한다. 지원하지 않는 형식이나 과도한 데이터로 키 유도를 시작하지 않는다. 복호화 후에도 JSON 구조와 이메일·비밀번호 범위를 검증한다.
+4. 복호화가 끝나면 창의 유효성, 경로, 페이지 표시 상태와 저장 암호문 변경 여부를 다시 확인한다. 취소·화면 이탈·저장 정보 변경 중 완료된 결과는 로그인에 사용하지 않는다.
+5. 검증된 ID/PW를 현재 페이지의 최대 2분 실행에만 전달한다. 키는 이후 보관하지 않는다. 잘못된 잠금 암호와 암호문 손상은 같은 정적 오류로 안내한다.
+6. 제출 완료·취소·시간 초과·탭 숨김·경로 이탈 시 자동화를 종료하고 원문 참조를 해제한다. 아직 제출하지 않은 스크립트 입력 비밀번호가 그대로 남아 있으면 지운다. 수동 수정값과 제출된 값은 JumpCloud의 처리를 위해 유지한다.
 
-Node.js 기본 test runner + 기존 jsdom으로 공개 DOM 계약을 재현한다. 가상 ID/PW만 사용한다. 입력 원문 접근 getter와 직렬화/로그/네트워크 경계를 막은 상태에서 정상 이메일·비밀번호 전환이 작동해야 한다. 실제 브라우저 자동완성은 jsdom에서 재현하지 않았다고 명시한다.
+잠금 암호 분실 시 복구 기능은 없다. 새 계정 정보와 잠금 암호를 등록하면 기존 암호문을 교체한다. 삭제 메뉴는 확인 후 자동 진행을 끄고 `GM_deleteValue('vault')`를 호출한다. 삭제 실패 시 이를 성공으로 안내하지 않는다. 다른 탭에서도 중지하거나 새로고침해야 변경이 확실히 반영된다.
 
-검증 항목: 비활성 초기값, 자동완성 대기와 안정화, DOM 교체, 직접 입력 중단, 취소/재개, 숨김 탭, 잘못된 origin/route/form action, 다중/비정상 폼, MFA/오류, 중복 실행과 재로드, 여러 탭 경쟁, 저장 실패, Web Locks 미지원, 대기 중 화면 이탈, 반복 클릭 방지, 정적 안내의 정보 유출 방지. 전체 기존 테스트와 syntax check를 함께 실행한다.
+## 확인한 JumpCloud 인터페이스
 
-## 구현 검토 결과
+2026-09-14 공개 페이지의 값 없는 DOM 속성과 공개 로그인 번들 v0.232.0을 확인했다. 실제 계정 로그인과 자격증명 조회는 하지 않았다.
 
-- 초기 설계의 GM 제출 기록은 탭별 캐시가 즉시 동기화되지 않는 조건에서 중복 클릭이 발생하는 테스트로 반증했다. 동일 출처에서 공유하는 전용 localStorage 기록과 Web Locks로 수정했다. 자격증명의 저장·전달 경로는 추가하지 않았다.
-- 잠금 callback 직전에 MFA가 나타나는 경우도 재검사한다. 중단된 이전 실행의 비동기 오류가 새 실행을 멈추지 않도록 실행 객체를 비교한다.
-- JumpCloud 테스트 58개와 기존 테스트를 포함한 전체 156개가 통과했다. 실제 브라우저에서는 공식 버튼 1개, POST 폼 1개, required 이메일 필드, fieldset/checkbox 구조, base/alert 부재를 값 조회 없이 확인했다.
-- 브라우저 저장소 설정이나 실제 로그인은 수행하지 않았다. 암호 관리자 제품·잠금 상태·계정 선택에 따른 통합 검증은 설치 후 사용자가 수행한다. 자동 로그인은 자동완성이 준비되고 MFA를 완료할 수 있는 조건에서만 성립한다.
+- 이메일 필드: `input[name="email"][type="email"][required]`, 폼 method POST. fieldset과 선택 사항인 Remember me 체크박스가 있다.
+- 공식 버튼: `button[data-automation="loginButton"][type="submit"]`.
+- UserPasswordEntry: `input[name="password"][type="password"][required]`. 빈 값이면 버튼이 disabled이며 같은 폼에 숨겨진 readonly 이메일 입력이 있다.
+- Vue가 입력과 제출을 소유한다. native input value setter와 `input` / `change` 이벤트로 값을 전달한다. Vue 내부 상태를 직접 조회·수정하지 않는다.
+- 비밀번호 입력의 Enter 처리가 native form submit 없이 실행될 수 있다. 수동 Login 클릭·Enter를 감지하면 자동화를 중지하되 제출에 필요한 비밀번호를 지우지 않는다.
 
-## 근거
+페이지 구조는 변경될 수 있다. 알려진 폼을 찾지 못하면 임의의 로그인 버튼이나 입력란을 추측하지 않고 자동 제출하지 않는다. [User Portal 안내](https://jumpcloud.com/support/get-started-user-portal), [확인한 공개 번들](https://cdn03.jumpcloud.com/jumpcloud-login-ui/v0.232.0-16bc982eb6f40a8abc339a8f74780e8b6aaa99ab/jumpcloud-login.dcf650ec.js)
 
-- [JumpCloud User Portal 로그인](https://jumpcloud.com/support/get-started-user-portal): 이메일, 비밀번호, MFA/JumpCloud Go 흐름.
-- [Chrome 암호 관리](https://support.google.com/chrome/answer/95606?hl=en): Chrome에 로그인하지 않았을 때 장치에 로컬 저장. 계정 저장과 구분해야 한다.
-- [Chrome 자동완성 이벤트](https://developer.chrome.com/blog/autofill-event-origin-trial): 입력 이벤트만으로 자동완성 출처를 구분할 수 없고 `:autofill` 지원에 차이가 있다. 원문을 제공하는 실험적 `autofillValues`는 사용하지 않는다.
-- [Web Locks 명세](https://www.w3.org/TR/web-locks/): 동일 출처의 공유 자원에 대한 exclusive lock.
+## 로그인 진행과 중단
+
+1. 최상위 프레임, 정확한 HTTPS origin과 `/login` 또는 `/login/`를 확인한다. hash는 없음·`#`·`#/`, query는 없거나 `step=password` 하나만 허용한다. 넓은 메타데이터 match를 런타임 검사로 제한한다.
+2. 암호문이 있으면 `enabled` 설정만으로 실행하지 않는다. 잠금 해제 메뉴에서만 현재 페이지의 저장 정보를 사용할 수 있다. 암호문이 없는 경우에만 외부 자동완성 모드를 허용한다.
+3. 활성 탭이며 document에 포커스가 있는 동안 검사한다. MutationObserver와 500ms polling을 사용하고 최대 2분 뒤 종료한다. 비밀번호 제출 즉시 자동화를 종료하며 로그인 성공으로 추정하지 않는다.
+4. 표시된 폼과 공식 버튼이 각각 하나여야 한다. POST, 본문 프레임 대상, 동일 출처 form action만 허용한다. 추가 입력, OTP, 새 비밀번호, 외부 action, base 태그, 별도 submit method 등 알려지지 않은 구조는 거부한다.
+5. 저장 모드에서는 빈 필드를 채운다. 다른 이메일이나 비밀번호가 이미 입력되어 있으면 덮어쓰지 않는다. 비밀번호 입력 전에 readonly 이메일 하나가 저장 계정과 일치하는지 확인한다. 이메일은 앞뒤 공백과 대소문자를 정규화해 비교한다.
+6. required 필드가 유효하고 버튼이 활성화된 상태가 1초 유지되면 제출을 준비한다. 저장 모드에서는 비밀번호가 비어 있어 버튼이 disabled여도 먼저 입력할 수 있다. 입력 이벤트의 재진입을 막고 안정화 시간을 다시 계산한다.
+7. 동일 출처 Web Locks exclusive lock 안에서 경로·활성 상태·폼·MFA·알림·계정·설정을 다시 확인한다. 제출 시각을 기록한 다음 공식 버튼을 클릭한다. 잠금이나 기록 저장 실패 시 제출하지 않는다. [Web Locks 명세](https://www.w3.org/TR/web-locks/)
+8. 이메일·비밀번호는 실행당 각각 한 번만 자동 제출한다. 같은 단계의 최근 10분 제출은 제한하며, 비밀번호 제출 기록은 두 단계 모두 제한한다. 이메일 제출 이후 비밀번호 단계는 진행할 수 있다. 10분 경과 자체로 재시도하지 않는다.
+9. visible 오류·경고, MFA, 사용자 입력, Escape, 취소, 경로 이탈에서 중단한다. 숨겨진 탭은 저장 정보와 설정 창도 잠근다. 명시적 다시 시도는 기록을 초기화하며 저장 정보가 있으면 이후 다시 잠금을 해제해야 한다.
+
+중복 방지 기록은 JumpCloud 출처의 전용 localStorage 키 `chann.jumpcloud-login-assistant.attempts.v1`에 `{email?: number, password?: number}` 시각만 저장한다. GM 캐시의 탭 간 지연에 의존하지 않도록 Web Locks 안에서 동기적으로 갱신한다. 페이지에서도 수정 가능한 비민감 데이터이며 인증 보안 경계는 아니다. 다른 JumpCloud 저장 키와 sessionStorage·쿠키는 조회하지 않는다.
+
+## 검증과 남은 한계
+
+Node.js test runner와 기존 jsdom을 사용하며 새 의존성은 없다. 가상 `.test` 계정만 사용한다. 저장 모드에서는 Node.js Web Crypto의 실제 PBKDF2와 AES-GCM으로 검증하고, 외부 자동완성 모드에서는 입력 원문 getter를 차단한다. 두 모드 모두 폼 직렬화·로그·쿠키·자체 네트워크·전체 페이지 HTML/텍스트 조회를 차단한다.
+
+JumpCloud 85개, 기존 기능 포함 전체 183개 테스트가 통과했다. 독립 복호화, 평문 미저장, 무작위 salt/IV, 잘못된 암호와 변조 거부, 잘못된 계정 입력 방지, 취소 중 비동기 완료, 저장·삭제 실패, 숨김 시 재잠금, 수동 제출, 계정 변경, 중복 제출·탭 경쟁을 검증했다. `npm run check`와 `git diff --check`도 통과했다.
+
+실제 Tampermonkey UI에서 등록·잠금 해제·자동 입력·MFA·포털 진입까지는 검증하지 않았다. jsdom 테스트는 실제 확장 프로그램의 실행 환경, 동기화, 브라우저 암호 관리자 간섭, 페이지의 최신 동작을 대신하지 않는다. 최초 설치 후 사용자가 자신의 환경에서 한 번 확인해야 한다. 스크립트는 잠금 암호 없는 무인 로그인이나 전문 암호 관리자 수준의 격리를 제공하지 않는다.
