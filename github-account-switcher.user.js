@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.3.0
+// @version      0.3.1
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -34,6 +34,9 @@
   let busy = false;
   let manualButton = null;
   let manualButtonSnapshot = null;
+  let manualControls = null;
+  let observedManualContext = '';
+  let dismissedManualContext = null;
   let lastKey = '';
   let activation = 0;
   let wasActive;
@@ -272,25 +275,45 @@
   function refreshManualButton() {
     const config = settings();
     const url = new URL(location.href);
+    const serialized = JSON.stringify(config);
+    const context = `${url.href}\n${serialized}`;
+    if (observedManualContext && observedManualContext !== context) dismissedManualContext = null;
+    observedManualContext = context;
     const target = config ? targetAccount(url, config) : '';
     const eligible = !!config && config.enabled === false && active() && !editing && !pendingEdits()
       && !busy && !!login(document) && login(document) !== target
       && !isAuthentication(url.pathname) && !isSystem(url.pathname);
-    if (!eligible) { manualButton?.remove(); return; }
-    if (!manualButton) {
+    if (!eligible || dismissedManualContext === context) { manualControls?.remove(); return; }
+    if (!manualControls) {
+      manualControls = document.createElement('div');
+      manualControls.dataset.gasSwitchControls = '';
+      manualControls.style.cssText = 'position:fixed;top:max(16px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:2147483647;display:flex;align-items:stretch;width:max-content;max-width:calc(100vw - 32px);border:1px solid #57606a;border-radius:8px;background:Canvas;color:CanvasText;font:14px/1.4 system-ui;box-shadow:0 2px 8px #0003';
       manualButton = document.createElement('button');
       manualButton.type = 'button';
       manualButton.dataset.gasSwitch = '';
-      manualButton.style.cssText = 'position:fixed;top:max(16px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:2147483647;max-width:calc(100vw - 32px);padding:8px 14px;border:1px solid #57606a;border-radius:8px;background:Canvas;color:CanvasText;font:14px/1.4 system-ui;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 8px #0003';
+      manualButton.style.cssText = 'min-width:0;max-width:100%;padding:8px 14px;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
       manualButton.addEventListener('click', () => {
         if (busy || !manualButtonSnapshot) return;
         const snapshot = manualButtonSnapshot;
         manualButton.disabled = true;
         void check({ manual: snapshot });
       });
-      document.body.append(manualButton);
-    } else if (!manualButton.isConnected) document.body.append(manualButton);
-    manualButtonSnapshot = { url: url.href, serialized: JSON.stringify(config), target, activation };
+      const dismissButton = document.createElement('button');
+      dismissButton.type = 'button';
+      dismissButton.dataset.gasSwitchDismiss = '';
+      dismissButton.setAttribute('aria-label', '계정 전환 버튼 닫기');
+      dismissButton.title = '계정 전환 버튼 닫기';
+      dismissButton.textContent = '×';
+      dismissButton.style.cssText = 'flex:0 0 40px;min-width:40px;padding:0;border:0;border-left:1px solid #57606a;background:transparent;color:inherit;font:20px/1 system-ui;cursor:pointer';
+      dismissButton.addEventListener('click', () => {
+        if (!manualControls?.isConnected) return;
+        dismissedManualContext = observedManualContext;
+        manualControls.remove();
+      });
+      manualControls.append(manualButton, dismissButton);
+    }
+    if (!manualControls.isConnected) document.body.append(manualControls);
+    manualButtonSnapshot = { url: url.href, serialized, target, activation };
     manualButton.disabled = false;
     manualButton.textContent = `@${target} 계정으로 전환`;
   }

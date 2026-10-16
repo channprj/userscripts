@@ -569,3 +569,60 @@ test('manual verification is cancelled by blur and refocus without visibility ch
   await h.flush();
   assert.equal(h.clicks.length, 0);
 });
+
+test('manual switch controls share a wrapper and dismiss without side effects until context changes', async t => {
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  const switchButton = h.document.querySelector('[data-gas-switch]');
+  const wrapper = switchButton?.parentElement;
+  const closeButton = wrapper?.querySelector('[data-gas-switch-dismiss]');
+  assert.equal(wrapper?.dataset.gasSwitchControls, '');
+  assert.equal(closeButton?.tagName, 'BUTTON');
+  assert.equal(closeButton?.type, 'button');
+  assert.equal(closeButton?.getAttribute('aria-label'), '계정 전환 버튼 닫기');
+  assert.equal(closeButton?.textContent, '×');
+  assert.equal(switchButton?.nextElementSibling, closeButton);
+
+  const fetchCalls = h.fetchCalls;
+  const writes = [...h.writes];
+  closeButton.click();
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+  assert.equal(h.fetchCalls, fetchCalls);
+  assert.deepEqual(h.writes, writes);
+  assert.equal(h.values.get('settings').enabled, false);
+  await h.tick();
+  await h.blurRefocus();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  h.document.querySelector('[data-gas-cancel]').click();
+  await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+
+  await h.navigate('/sample-team/repo?view=changed');
+  assert.ok(h.document.querySelector('[data-gas-switch-controls]'));
+  assert.equal(h.document.querySelector('[data-gas-switch]')?.textContent, '@sample-work 계정으로 전환');
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
+  assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo?view=changed'}]);
+  assert.equal(h.values.get('settings').enabled, false);
+});
+
+test('dismissal resets after ineligible routes, settings changes, and reset', async t => {
+  const h = setup(t, {route:'/sample-team/repo', values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  h.document.querySelector('[data-gas-switch-dismiss]')?.click();
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+  await h.navigate('/settings/profile');
+  await h.navigate('/sample-team/repo');
+  assert.ok(h.document.querySelector('[data-gas-switch-controls]'));
+
+  h.document.querySelector('[data-gas-switch-dismiss]').click();
+  h.values.set('settings', {...config, personal:'other-personal', enabled:false});
+  await h.tick();
+  assert.ok(h.document.querySelector('[data-gas-switch-controls]'));
+
+  h.document.querySelector('[data-gas-switch-dismiss]').click();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  h.document.querySelector('[data-gas-reset]').click();
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+});
