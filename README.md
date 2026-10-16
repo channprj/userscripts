@@ -19,7 +19,7 @@
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
-| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 또는 버튼 클릭으로 전환합니다. | 0.3.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
+| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 또는 버튼 클릭으로 전환합니다. | 0.3.1 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
 
 ---
@@ -119,6 +119,8 @@ iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Ph
 GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user 또는 Enterprise 경로에 맞는 계정으로 자동 전환합니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용하며, `/settings` 같은 GitHub 설정·시스템 페이지에서는 전환하지 않습니다.
 
 자동 전환을 끄면 현재 계정과 전환할 계정이 다를 때 화면 상단 중앙에 **@계정명 계정으로 전환** 버튼이 표시됩니다. 버튼을 클릭하면 현재 주소를 유지하며 해당 계정으로 전환합니다. 자동 전환은 계속 꺼진 상태로 유지됩니다.
+
+버튼 오른쪽의 **×**를 누르면 현재 페이지에서 전환 버튼을 숨깁니다. 계정이나 자동 전환 설정은 바뀌지 않습니다. 주소나 저장된 설정이 바뀌거나 페이지를 새로고침하면 필요한 경우 다시 표시됩니다.
 
 1. 같은 브라우저의 GitHub에서 프로필 메뉴 → **Account switcher → Add account**로 사용할 계정들을 먼저 로그인합니다. 자세한 내용은 [GitHub 계정 전환 안내](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/switching-between-accounts)를 참고하세요.
 2. 위 **Install** 링크로 스크립트를 설치하고 GitHub 페이지를 새로고침합니다.
