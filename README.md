@@ -19,7 +19,7 @@
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
-| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 또는 버튼 클릭으로 전환합니다. | 0.3.1 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
+| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 계정을 자동 또는 버튼 클릭으로 전환합니다. | 0.4.0 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
 
 ---
@@ -118,7 +118,7 @@ iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Ph
 
 GitHub의 **Account switcher** 메뉴를 이용해 접속한 organization/user 또는 Enterprise 경로에 맞는 계정으로 자동 전환합니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용하며, `/settings` 같은 GitHub 설정·시스템 페이지에서는 전환하지 않습니다.
 
-자동 전환을 끄면 현재 계정과 전환할 계정이 다를 때 화면 상단 중앙에 **@계정명 계정으로 전환** 버튼이 표시됩니다. 버튼을 클릭하면 현재 주소를 유지하며 해당 계정으로 전환합니다. 자동 전환은 계속 꺼진 상태로 유지됩니다.
+전체 자동 전환을 끄면 자동 전환 예외 계정을 제외한 나머지 대상에는 수동 전환 버튼을 사용합니다. 현재 계정과 전환할 계정이 다를 때 화면 상단 중앙에 **@계정명 계정으로 전환** 버튼이 표시됩니다. 버튼을 클릭하면 현재 주소를 유지하며 해당 계정으로 전환합니다. 전체 자동 전환은 계속 꺼진 상태로 유지됩니다.
 
 버튼 오른쪽의 **×**를 누르면 현재 페이지에서 전환 버튼을 숨깁니다. 계정이나 자동 전환 설정은 바뀌지 않습니다. 주소나 저장된 설정이 바뀌거나 페이지를 새로고침하면 필요한 경우 다시 표시됩니다.
 
@@ -150,14 +150,15 @@ enterprises/* = sample-work
 
 1. **GitHub 페이지를 연 상태에서** 브라우저의 **Tampermonkey / Violentmonkey 아이콘**을 클릭합니다.
 2. **GitHub Account Switcher: 설정**을 선택합니다.
-3. **기본 개인 계정 username**이나 **Organization / user / Enterprise 전환 규칙**을 수정합니다.
+3. **기본 개인 계정 username**, **Organization / user / Enterprise 전환 규칙**, **자동 전환 예외 계정 username**을 수정합니다.
 4. **저장**을 누릅니다.
 
 처음 표시되는 페이지의 설정 안내를 닫았더라도, 매니저 메뉴에서 언제든 설정 화면을 다시 열 수 있습니다. 수정한 값도 userscript 매니저 저장소에만 보관되며 Git 저장소에는 기록되지 않습니다.
 
 - **규칙 하나 삭제:** 해당 줄을 지우고 **저장**을 누릅니다.
 - **전체 초기화:** 설정 화면의 **설정 삭제**를 누릅니다. 개인 계정과 모든 규칙이 삭제되며, 다시 설정할 때까지 자동 전환이 동작하지 않습니다.
-- **자동 전환 일시 중지·재개:** 설정 화면의 **자동 전환 사용**을 해제하거나, 매니저 메뉴의 **GitHub Account Switcher: 자동 전환 켜기/끄기**를 선택합니다. 저장한 계정과 규칙은 유지됩니다. 자동 전환을 끈 동안에는 상단 중앙의 버튼으로 직접 전환할 수 있습니다.
+- **전체 자동 전환 일시 중지·재개:** 설정 화면의 **자동 전환 사용**을 해제하거나, 매니저 메뉴의 **GitHub Account Switcher: 자동 전환 켜기/끄기**를 선택합니다. 저장한 계정과 규칙, 예외 설정은 유지됩니다. 전체 자동 전환을 끈 동안에는 예외 계정만 자동 전환하고 나머지는 상단 중앙의 버튼으로 직접 전환할 수 있습니다.
+- **특정 계정만 자동 전환:** **자동 전환 사용**을 해제한 뒤 **자동 전환 예외 계정 username**에 사용할 계정명(예: `sample-work`)을 입력하고 **저장**을 누릅니다. 기존 전환 규칙이나 기본 개인 계정으로 결정된 대상이 이 계정과 정확히 일치할 때만 자동 전환합니다. 대소문자는 구분하지 않습니다. 예외 입력란은 기본적으로 비어 있으며, 비우고 저장하면 예외가 해제됩니다. 모든 계정을 수동으로 전환하려면 예외 입력란을 비우고 **자동 전환 사용**도 해제하세요.
 - **전환 다시 시도:** 계정 추가나 재로그인 후 매니저 메뉴의 **GitHub Account Switcher: 다시 시도**를 선택합니다.
 
 #### 동작 범위와 예외
@@ -188,7 +189,7 @@ npm test
 npm run check
 ```
 
-GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. Organization/user 및 Enterprise 경로별 전환, 개인 계정 복귀, 설정·시스템 경로 제외, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다. 자동 전환을 끈 상태의 버튼 표시와 수동 전환, 실패 후 재시도, 중복 클릭 방지, 페이지·설정·창 포커스 변경 중의 요청 취소도 확인합니다.
+GitHub 스크립트 테스트는 실제 메뉴 구조를 반영한 가상 DOM과 가상 계정을 사용합니다. Organization/user 및 Enterprise 경로별 전환, 개인 계정 복귀, 설정·시스템 경로 제외, 내부 이동, 로컬 설정, 인증 예외, 반복 전환 방지, 작성 중인 내용 보호를 확인합니다. 자동 전환을 끈 상태의 버튼 표시와 수동 전환, 실패 후 재시도, 중복 클릭 방지, 페이지·설정·창 포커스 변경 중의 요청 취소도 확인합니다. 특정 계정의 자동 전환 예외와 설정 저장·해제, 예외를 적용해도 유지되는 전환 보류 조건도 검증합니다.
 
 ## License
 
