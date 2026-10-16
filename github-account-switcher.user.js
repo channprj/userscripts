@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.3.1
+// @version      0.4.0
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -58,6 +58,8 @@
   function settings() {
     const value = GM_getValue('settings', EMPTY);
     if (!value || !NAME_PATTERN.test(value.personal ?? '') || !Array.isArray(value.rules)) return null;
+    if (Object.hasOwn(value, 'autoSwitchAccount') && (typeof value.autoSwitchAccount !== 'string'
+      || (value.autoSwitchAccount.trim() && !NAME_PATTERN.test(value.autoSwitchAccount.trim())))) return null;
     const owners = new Set();
     for (const rule of value.rules) {
       if (!rule || !validRuleOwner(rule.owner) || !NAME_PATTERN.test(rule.account ?? '')) return null;
@@ -87,6 +89,11 @@
     const owner = normalized(['orgs', 'users'].includes(parts[0]?.toLowerCase()) ? parts[1] : parts[0]);
     const ownerRule = config.rules.find(rule => normalized(rule.owner) === owner && owner !== ENTERPRISES_RULE);
     return normalized(enterpriseRule?.account ?? ownerRule?.account ?? config.personal);
+  }
+
+  function isAutomatic(config, target) {
+    return config.enabled !== false || (!!normalized(config.autoSwitchAccount)
+      && normalized(config.autoSwitchAccount) === target);
   }
 
   function notice(message) {
@@ -125,6 +132,10 @@
       <label style="display:block">기본 개인 계정 username
         <input name="personal" required autocomplete="off" spellcheck="false" style="display:block;width:100%;box-sizing:border-box;margin:6px 0 16px;padding:8px">
       </label>
+      <label style="display:block">자동 전환 예외 계정 username
+        <input name="autoSwitchAccount" autocomplete="off" spellcheck="false" style="display:block;width:100%;box-sizing:border-box;margin:6px 0;padding:8px">
+      </label>
+      <p>전체 자동 전환을 꺼도 이 계정이 대상이면 자동 전환합니다. 비우면 예외가 없습니다.</p>
       <label style="display:block">Organization / user / Enterprise 전환 규칙
         <textarea name="rules" rows="6" autocomplete="off" spellcheck="false" style="display:block;width:100%;box-sizing:border-box;margin:6px 0;padding:8px"></textarea>
       </label>
@@ -141,9 +152,11 @@
     const personal = form.elements.namedItem('personal');
     const rules = form.elements.namedItem('rules');
     const enabled = form.elements.namedItem('enabled');
+    const autoSwitchAccount = form.elements.namedItem('autoSwitchAccount');
     personal.value = value.personal;
     rules.value = value.rules.map(rule => `${rule.owner} = ${rule.account}`).join('\n');
     enabled.checked = value.enabled !== false;
+    autoSwitchAccount.value = value.autoSwitchAccount ?? '';
     const close = () => {
       dialog.remove();
       editing = false;
@@ -164,6 +177,8 @@
       const seen = new Set();
       try {
         if (!NAME_PATTERN.test(personal.value.trim())) throw new Error('개인 계정의 username을 확인해주세요.');
+        const exception = autoSwitchAccount.value.trim();
+        if (exception && !NAME_PATTERN.test(exception)) throw new Error('자동 전환 예외 계정의 username을 확인해주세요.');
         for (const line of rules.value.split('\n').map(line => line.trim()).filter(Boolean)) {
           const pair = line.split('=').map(part => part.trim());
           if (pair.length !== 2 || !validRuleOwner(pair[0]) || !NAME_PATTERN.test(pair[1])) {
@@ -173,7 +188,9 @@
           seen.add(normalized(pair[0]));
           parsed.push({ owner: pair[0], account: pair[1] });
         }
-        GM_setValue('settings', { personal: personal.value.trim(), rules: parsed, enabled: enabled.checked });
+        const next = { personal: personal.value.trim(), rules: parsed, enabled: enabled.checked };
+        if (exception) next.autoSwitchAccount = exception;
+        GM_setValue('settings', next);
         GM_deleteValue('attempt');
         close();
         document.querySelector('[data-gas-notice]')?.remove();
@@ -280,7 +297,7 @@
     if (observedManualContext && observedManualContext !== context) dismissedManualContext = null;
     observedManualContext = context;
     const target = config ? targetAccount(url, config) : '';
-    const eligible = !!config && config.enabled === false && active() && !editing && !pendingEdits()
+    const eligible = !!config && !isAutomatic(config, target) && active() && !editing && !pendingEdits()
       && !busy && !!login(document) && login(document) !== target
       && !isAuthentication(url.pathname) && !isSystem(url.pathname);
     if (!eligible || dismissedManualContext === context) { manualControls?.remove(); return; }
@@ -323,25 +340,28 @@
     if (!manual) refreshManualButton();
     if (!active() || busy || editing || pendingEdits()) { refreshManualButton(); return; }
     const config = settings();
-    if (!config || (config.enabled === false && !manual)) return;
+    if (!config) return;
     const url = new URL(location.href);
+    const target = targetAccount(url, config);
+    if (!isAutomatic(config, target) && !manual) { refreshManualButton(); return; }
     if (isAuthentication(url.pathname) || isSystem(url.pathname)) { refreshManualButton(); return; }
     const serialized = JSON.stringify(config);
     if (manual && (manual.url !== url.href || manual.serialized !== serialized || manual.activation !== activation
-      || targetAccount(url, config) !== manual.target || config.enabled !== false)) { refreshManualButton(); return; }
+      || target !== manual.target || isAutomatic(config, target))) { refreshManualButton(); return; }
     const key = `${url.href}\n${activation}\n${serialized}`;
     if (!manual && lastKey === key) return;
     if (!manual) lastKey = key;
     const expectedActivation = manual?.activation ?? activation;
     const valid = () => active() && !editing && !pendingEdits() && location.href === url.href
       && activation === expectedActivation && JSON.stringify(settings()) === serialized
-      && (!manual || (manual.url === location.href && manual.target === targetAccount(url, settings())));
+      && (!manual || (manual.url === location.href && manual.target === targetAccount(url, settings())
+        && !isAutomatic(settings(), manual.target)));
     busy = true;
     refreshManualButton();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8_000);
     try {
-      const target = manual?.target ?? targetAccount(url, config);
+      const switchTarget = manual?.target ?? target;
       // A background tab's meta tag may describe the previous shared session.
       // Check the server before using any menu cached in that tab.
       const response = await fetch('/', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
@@ -358,14 +378,14 @@
         return;
       }
       const previous = GM_getValue('attempt', null);
-      if (current === target) {
-        if (previous?.target === target) GM_deleteValue('attempt');
+      if (current === switchTarget) {
+        if (previous?.target === switchTarget) GM_deleteValue('attempt');
         return;
       }
-      if (previous && Date.now() - previous.at < (previous.target === target ? SWITCH_COOLDOWN : 2_000)) {
+      if (previous && Date.now() - previous.at < (previous.target === switchTarget ? SWITCH_COOLDOWN : 2_000)) {
         throw new Error('반복 전환을 멈췄습니다. 계정 상태를 확인한 뒤 매니저 메뉴에서 다시 시도를 눌러주세요.');
       }
-      await switchAccount(target, valid);
+      await switchAccount(switchTarget, valid);
     } catch (error) {
       if (valid()) notice(error.name === 'AbortError' ? '계정 확인 시간이 초과되었습니다. 매니저 메뉴에서 다시 시도를 눌러주세요.' : error.message);
     } finally {
@@ -393,7 +413,9 @@
     GM_setValue('settings', config);
     refreshManualButton();
     lastKey = '';
-    notice(config.enabled ? '자동 전환을 켰습니다.' : '자동 전환을 껐습니다.');
+    notice(config.enabled ? '자동 전환을 켰습니다.' : normalized(config.autoSwitchAccount)
+      ? `자동 전환을 껐습니다. 예외 계정 @${config.autoSwitchAccount.trim()}이 대상이면 계속 자동 전환합니다.`
+      : '자동 전환을 껐습니다.');
     void check();
   });
 

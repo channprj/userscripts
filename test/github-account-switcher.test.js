@@ -23,7 +23,7 @@ function setup(t, options = {}) {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('jsdomError', error => errors.push(error));
   const dom = new JSDOM(`<!doctype html><meta name="user-login" content="${options.current ?? 'sample-personal'}">
-    <header><button aria-labelledby="user-menu-label" data-login="sample-personal">Profile</button><span id="user-menu-label" hidden>Open user navigation menu</span></header><main></main>`, {
+    <header><button aria-labelledby="user-menu-label" data-login="sample-personal">Profile</button><span id="user-menu-label" hidden>Open user navigation menu</span></header><main>${options.draft ? '<textarea>draft</textarea>' : ''}</main>`, {
     url: `https://github.com${options.route ?? '/sample-team/repo/pull/42?tab=files#diff-1'}`,
     runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole,
   });
@@ -90,6 +90,7 @@ function setup(t, options = {}) {
     });
   });
   window.eval(source);
+  if (options.draft) document.querySelector('textarea').dispatchEvent(new window.Event('input', {bubbles:true}));
   const flush = async () => {
     for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
   };
@@ -306,6 +307,38 @@ test('settings save entered mappings only in userscript-manager storage', async 
   assert.equal(h.document.cookie, '');
 });
 
+test('settings save, reopen, and clear an optional automatic switch exception', async t => {
+  const h = setup(t, {values:new Map()}); await h.flush();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  const input = h.document.querySelector('[name="autoSwitchAccount"]');
+  assert.ok(input);
+  input.value = ' sample-work ';
+  h.document.querySelector('[name="personal"]').value = 'sample-personal';
+  h.document.querySelector('form').dispatchEvent(new h.window.Event('submit', {cancelable:true}));
+  await h.flush();
+  assert.equal(h.values.get('settings').autoSwitchAccount, 'sample-work');
+  h.menus.get('GitHub Account Switcher: 설정')();
+  assert.equal(h.document.querySelector('[name="autoSwitchAccount"]').value, 'sample-work');
+  h.document.querySelector('[name="autoSwitchAccount"]').value = '   ';
+  h.document.querySelector('form').dispatchEvent(new h.window.Event('submit', {cancelable:true}));
+  await h.flush();
+  assert.equal(Object.hasOwn(h.values.get('settings'), 'autoSwitchAccount'), false);
+});
+
+test('invalid exception usernames are rejected in the form and stored settings', async t => {
+  const h = setup(t, {values:new Map([['settings', config]])}); await h.flush();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  h.document.querySelector('[name="autoSwitchAccount"]').value = 'bad/name';
+  h.document.querySelector('form').dispatchEvent(new h.window.Event('submit', {cancelable:true}));
+  assert.match(h.document.querySelector('[data-gas-error]').textContent, /username/);
+  assert.equal(h.values.get('settings').autoSwitchAccount, undefined);
+  const malformed = setup(t, {values:new Map([['settings',{...config,autoSwitchAccount:4}]])});
+  await malformed.flush();
+  assert.equal(malformed.document.querySelector('[data-gas-switch]'), null);
+  assert.equal(malformed.fetchCalls, 0);
+  assert.match(malformed.document.querySelector('[data-gas-notice]').textContent, /설정/);
+});
+
 test('enterprise rules can be saved, applied immediately and reopened with existing mappings', async t => {
   const h = setup(t, {route:'/enterprises/sample-company'}); await h.flush();
   h.menus.get('GitHub Account Switcher: 설정')();
@@ -374,6 +407,88 @@ test('disabled configuration stays inactive until explicitly enabled', async t =
   assert.equal(h.clicks[0]?.account, 'sample-work');
 });
 
+for (const exception of ['sample-work', ' SAMPLE-WORK ']) {
+  test(`disabled automation switches when the exact exception matches after normalization: ${exception}`, async t => {
+    const h = setup(t, {values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:exception}]])});
+    await h.flush();
+    assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+    assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+    assert.equal(h.values.get('settings').enabled, false);
+  });
+}
+
+for (const exception of ['sample-work-extra', 'other-work', undefined, '']) {
+  test(`disabled automation stays manual when exception does not exactly match: ${exception ?? 'absent'}`, async t => {
+    const stored = {...config,enabled:false};
+    if (exception !== undefined) stored.autoSwitchAccount = exception;
+    const h = setup(t, {values:new Map([['settings',stored]])}); await h.flush();
+    assert.equal(h.clicks.length, 0);
+    assert.ok(h.document.querySelector('[data-gas-switch]'));
+    assert.equal(h.fetchCalls, 0);
+  });
+}
+
+test('global automation remains enabled for any target regardless of exception', async t => {
+  const h = setup(t, {route:'/another-owner/repo', current:'sample-work', values:new Map([['settings',{...config,autoSwitchAccount:'sample-work'}]])});
+  await h.flush();
+  assert.deepEqual(h.clicks, [{account:'sample-personal', url:'https://github.com/another-owner/repo'}]);
+});
+
+test('exception applies to personal fallback and enterprise rule targets', async t => {
+  const personal = setup(t, {route:'/', current:'sample-work', values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:' SAMPLE-PERSONAL '}]])});
+  await personal.flush();
+  assert.equal(personal.clicks[0]?.account, 'sample-personal');
+  const enterprise = setup(t, {route:'/enterprises/sample-company', current:'sample-personal', values:new Map([['settings',{...enterpriseConfig,enabled:false,autoSwitchAccount:'sample-work'}]])});
+  await enterprise.flush();
+  assert.equal(enterprise.clicks[0]?.account, 'sample-work');
+});
+
+test('matching exception keeps authentication, system, draft, background, and cooldown guards', async t => {
+  for (const options of [
+    {route:'/orgs/sample-team/sso',exception:'sample-work'},
+    {route:'/settings/profile',exception:'sample-personal'},
+    {focused:false,visible:false,exception:'sample-work'},
+    {draft:true,exception:'sample-work'}, {attempt:true,exception:'sample-work'},
+  ]) {
+    const values = new Map([['settings',{...config,enabled:false,autoSwitchAccount:options.exception}]]);
+    if (options.attempt) { delete options.attempt; values.set('attempt',{target:'sample-work',at:Date.now()}); }
+    const h = setup(t, {values,...options}); await h.flush();
+    if (options.draft) { h.document.querySelector('textarea').dispatchEvent(new h.window.Event('input', {bubbles:true})); await h.tick(); }
+    assert.equal(h.clicks.length, 0);
+    if (options.route || options.focused === false) assert.equal(h.fetchCalls, 0);
+  }
+});
+
+test('changing the exception cancels deferred automatic session verification', async t => {
+  let resolveFetch;
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:'sample-work'}]]), fetch:() => new Promise(resolve => { resolveFetch = resolve; })});
+  await h.flush();
+  assert.equal(h.fetchCalls, 1);
+  h.values.set('settings', {...config,enabled:false,autoSwitchAccount:'other-work'});
+  resolveFetch({ok:true,url:'https://github.com/',text:async()=>'<meta name="user-login" content="sample-personal">'});
+  await h.flush();
+  assert.equal(h.clicks.length, 0);
+});
+
+test('SPA navigation updates exception mode between manual and automatic switching', async t => {
+  const h = setup(t, {route:'/another-owner/repo', current:'another-work', values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:'sample-work'}]])});
+  await h.flush();
+  assert.ok(h.document.querySelector('[data-gas-switch]'));
+  assert.equal(h.fetchCalls, 0);
+  await h.navigate('/sample-team/repo');
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  assert.equal(h.clicks[0]?.account, 'sample-work');
+});
+
+test('disabling global automation preserves the exception and explains it remains active', async t => {
+  const h = setup(t, {current:'sample-work',values:new Map([['settings',{...config,autoSwitchAccount:'sample-work'}]])}); await h.flush();
+  h.menus.get('GitHub Account Switcher: 자동 전환 켜기/끄기')();
+  await h.flush();
+  assert.equal(h.values.get('settings').enabled, false);
+  assert.equal(h.values.get('settings').autoSwitchAccount, 'sample-work');
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /예외 계정.*계속 자동 전환/);
+});
+
 test('deleting settings removes stored mappings and stops switching', async t => {
   const h = setup(t, {route:'/'}); await h.flush();
   h.menus.get('GitHub Account Switcher: 설정')();
@@ -418,6 +533,17 @@ test('a retained manual button cannot retarget after SPA navigation', async t =>
   await h.flush();
   assert.deepEqual(h.clicks, []);
   assert.equal(h.fetchCalls, 0);
+});
+
+test('a retained manual button cannot run after its exception setting changes', async t => {
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:'other-work'}]])});
+  await h.flush();
+  const button = h.document.querySelector('[data-gas-switch]');
+  h.values.set('settings', {...config,enabled:false,autoSwitchAccount:'sample-work'});
+  button.click();
+  await h.flush();
+  assert.equal(h.fetchCalls, 0);
+  assert.equal(h.clicks.length, 0);
 });
 
 test('manual clicks are single flight', async t => {
