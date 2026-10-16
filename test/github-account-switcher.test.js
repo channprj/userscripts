@@ -36,6 +36,8 @@ function setup(t, options = {}) {
   const values = options.values ?? new Map([['settings', structuredClone(config)]]);
   const menus = new Map();
   const clicks = [];
+  const attemptsAtClick = [];
+  const menuClicks = { profile: 0, switcher: 0 };
   const intervals = [];
   const writes = [];
   let fetchCalls = 0;
@@ -58,6 +60,7 @@ function setup(t, options = {}) {
   window.fetch = (...args) => { fetchCalls++; return fetchImpl(...args); };
   const userButton = document.querySelector('header button');
   userButton.addEventListener('click', () => {
+    menuClicks.profile++;
     const existing = document.querySelector('[data-fixture-navigation]');
     if (existing) {
       existing.remove();
@@ -71,6 +74,7 @@ function setup(t, options = {}) {
     nav.innerHTML = '<button id="switcher" aria-labelledby="switcher-label" aria-expanded="false">Switch</button><span id="switcher-label" hidden>Account switcher</span>';
     document.body.append(nav);
     nav.querySelector('button').addEventListener('click', () => {
+      menuClicks.switcher++;
       if (nav.querySelector('[role="menu"]')) return;
       nav.querySelector('button').setAttribute('aria-expanded', 'true');
       const menu = document.createElement('ul');
@@ -82,23 +86,39 @@ function setup(t, options = {}) {
         item.setAttribute('aria-labelledby', `account-label-${index}`);
         if (options.expired === account) item.setAttribute('aria-disabled', 'true');
         item.innerHTML = `<span id="account-label-${index}" data-component="ActionList.Item.Label">${account}</span><span>Display Name</span>`;
-        item.addEventListener('click', () => clicks.push({ account, url: window.location.href }));
+        item.addEventListener('click', () => {
+          attemptsAtClick.push(values.get('attempt') ?? null);
+          clicks.push({ account, url: window.location.href });
+        });
         menu.append(item);
       }
       menu.insertAdjacentHTML('beforeend', '<li><a role="menuitem" href="/login?add_account=1">Add account</a></li>');
       nav.append(menu);
     });
   });
+  if (options.preopenProfile || options.preopenAccounts) userButton.click();
+  if (options.preopenAccounts) document.querySelector('#switcher').click();
+  if (options.navigationApi) {
+    const navigation = new window.EventTarget();
+    navigation.currentEntry = { get url() { return window.location.href; } };
+    Object.defineProperty(window, 'navigation', { configurable:true, value:navigation });
+    const pushState = window.history.pushState.bind(window.history);
+    window.history.pushState = (...args) => {
+      pushState(...args);
+      navigation.dispatchEvent(new window.Event('currententrychange'));
+    };
+  }
   window.eval(source);
   if (options.draft) document.querySelector('textarea').dispatchEvent(new window.Event('input', {bubbles:true}));
   const flush = async () => {
     for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
   };
   return {
-    window, document, values, menus, clicks, writes, errors, flush, get fetchCalls() { return fetchCalls; },
+    window, document, values, menus, clicks, attemptsAtClick, menuClicks, writes, errors, flush, get fetchCalls() { return fetchCalls; },
     async tick() { for (const fn of intervals) fn(); await flush(); },
     async settle() { await new Promise(resolve => setTimeout(resolve, 35)); await flush(); },
     async navigate(route) { window.history.pushState({}, '', route); await this.tick(); },
+    async navigateWithoutTick(route) { window.history.pushState({}, '', route); await flush(); },
     async activate() {
       visible = true; focused = true;
       document.dispatchEvent(new window.Event('visibilitychange'));
@@ -124,6 +144,22 @@ test('switches the exact configured account and retains the full destination', a
   const h = setup(t);
   await h.flush();
   assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+  assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
+  assert.deepEqual(h.attemptsAtClick, [{target:'sample-work', at:h.values.get('attempt').at}]);
+});
+
+test('uses only the remaining menu clicks when the profile menu is already open', async t => {
+  const h = setup(t, {preopenProfile:true}); await h.flush();
+  assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
+  assert.equal(h.clicks.length, 1);
+  assert.ok(h.document.querySelector('[data-fixture-navigation]'));
+});
+
+test('uses one menu click when the account list is already expanded', async t => {
+  const h = setup(t, {preopenAccounts:true}); await h.flush();
+  assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
+  assert.equal(h.clicks.length, 1);
+  assert.ok(h.document.querySelector('[data-fixture-navigation]'));
 });
 
 for (const route of ['/sample-team', '/SAMPLE-TEAM/repo', '/orgs/sample-team/projects/1', '/users/sample-team/projects/1']) {
@@ -233,6 +269,36 @@ test('reacts to client-side navigation without requiring a full page load', asyn
   assert.equal(h.clicks[0]?.account, 'sample-work');
 });
 
+test('Navigation API route changes trigger a check without waiting for the interval', async t => {
+  const h = setup(t, {route:'/', navigationApi:true}); await h.flush();
+  await h.navigateWithoutTick('/sample-team/repo');
+  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.fetchCalls, 2);
+  h.window.navigation.dispatchEvent(new h.window.Event('currententrychange'));
+  await h.flush();
+  assert.equal(h.fetchCalls, 2);
+});
+
+test('a route event cancels old verification and polling checks the new route', async t => {
+  let resolveOld;
+  let calls = 0;
+  const h = setup(t, {
+    route:'/sample-team/repo', navigationApi:true,
+    values:new Map([['settings', {...config, rules:[...config.rules, {owner:'another-team', account:'sample-work-extra'}]}]]),
+    fetch:() => ++calls === 1 ? new Promise(resolve => { resolveOld = resolve; }) : Promise.resolve({
+      ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">',
+    }),
+  });
+  await h.flush();
+  await h.navigateWithoutTick('/another-team/repo');
+  resolveOld({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'});
+  await h.flush();
+  assert.equal(h.clicks.length, 0);
+  await h.tick();
+  assert.deepEqual(h.clicks.map(click => click.account), ['sample-work-extra']);
+  assert.equal(h.fetchCalls, 2);
+});
+
 test('keeps background tabs idle and switches on activation', async t => {
   const h = setup(t, {visible:false, focused:false}); await h.flush();
   assert.equal(h.clicks.length, 0);
@@ -251,6 +317,8 @@ for (const route of ['/login', '/session', '/sessions/verified-device', '/logout
 test('an unavailable account stops without selecting another account', async t => {
   const h = setup(t, {accounts:['sample-work-extra']}); await h.settle();
   assert.equal(h.clicks.length, 0);
+  assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
+  assert.deepEqual(h.menuClicks, {profile:2, switcher:1});
   assert.match(h.document.body.textContent, /계정|account/i);
   await h.tick();
   assert.equal(h.clicks.length, 0);
@@ -271,6 +339,14 @@ test('a failed switch cannot loop across page reloads', async t => {
 test('failed session verification never starts a switch', async t => {
   const h = setup(t, {fetch:async () => {throw new Error('offline');}}); await h.flush();
   assert.equal(h.clicks.length, 0);
+  assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
+});
+
+test('an expired target closes only a menu opened by the script', async t => {
+  const h = setup(t, {expired:'sample-work', preopenProfile:true}); await h.flush();
+  assert.equal(h.clicks.length, 0);
+  assert.ok(h.document.querySelector('[data-fixture-navigation]'));
+  assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
 });
 
 test('navigation during session verification cancels a stale switch', async t => {
@@ -387,6 +463,7 @@ for (const html of ['<textarea>draft</textarea>', '<select><option value="a">A</
 test('stale account markup reloads before any account click', async t => {
   const h = setup(t, {current:'sample-personal', session:'sample-other', expectReload:true}); await h.flush();
   assert.equal(h.clicks.length, 0);
+  assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
   assert.equal(h.errors.length, 1);
   assert.match(h.errors[0].message, /navigation/i);
   const next = setup(t, {current:'sample-personal', session:'sample-other', values:h.values}); await next.flush();

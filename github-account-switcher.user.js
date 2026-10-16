@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.4.0
+// @version      0.4.1
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -258,6 +258,7 @@
 
   async function switchAccount(target, valid) {
     let opened = false;
+    let submitted = false;
     try {
       let switcher = buttonNamed('Account switcher');
       if (!switcher) {
@@ -281,11 +282,12 @@
       // Persist before clicking so a rejected switch / reload cannot create a loop.
       GM_setValue('attempt', { target, at: Date.now() });
       item.click();
+      submitted = true;
       // GitHub's own handler performs the switch and preserves the destination.
     } catch (error) {
       if (valid()) notice(error.message);
     } finally {
-      if (opened) buttonNamed('Close user navigation menu')?.click();
+      if (opened && !submitted) buttonNamed('Close user navigation menu')?.click();
     }
   }
 
@@ -438,6 +440,7 @@
   };
   window.addEventListener('focus', activate);
   window.addEventListener('blur', activate);
+  window.navigation?.addEventListener('currententrychange', () => { void check(); });
   document.addEventListener('visibilitychange', activate);
   for (const name of ['turbo:load', 'pjax:end']) document.addEventListener(name, () => { void check(); });
   window.addEventListener('popstate', () => { void check(); });
