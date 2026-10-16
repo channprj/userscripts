@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.2.1
+// @version      0.3.0
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -32,8 +32,11 @@
   ]);
   const SWITCH_COOLDOWN = 30_000;
   let busy = false;
+  let manualButton = null;
+  let manualButtonSnapshot = null;
   let lastKey = '';
   let activation = 0;
+  let wasActive;
   let editing = false;
   const editedControls = new Set();
 
@@ -41,6 +44,7 @@
   const decoded = value => { try { return decodeURIComponent(value); } catch { return value; } };
   const validRuleOwner = value => NAME_PATTERN.test(value ?? '') || normalized(value) === ENTERPRISES_RULE;
   const active = () => document.visibilityState === 'visible' && document.hasFocus();
+  wasActive = active();
   const login = doc => normalized(doc.querySelector('meta[name="user-login"]')?.content);
 
   function pendingEdits() {
@@ -105,6 +109,7 @@
   function openSettings() {
     if (editing) return;
     editing = true;
+    refreshManualButton();
     const value = settings() ?? EMPTY;
     const dialog = document.createElement('dialog');
     dialog.dataset.gasSettings = '';
@@ -264,23 +269,56 @@
     }
   }
 
-  async function check() {
-    if (!active() || busy || editing || pendingEdits()) return;
+  function refreshManualButton() {
     const config = settings();
-    if (!config || config.enabled === false) return;
     const url = new URL(location.href);
-    if (isAuthentication(url.pathname) || isSystem(url.pathname)) return;
+    const target = config ? targetAccount(url, config) : '';
+    const eligible = !!config && config.enabled === false && active() && !editing && !pendingEdits()
+      && !busy && !!login(document) && login(document) !== target
+      && !isAuthentication(url.pathname) && !isSystem(url.pathname);
+    if (!eligible) { manualButton?.remove(); return; }
+    if (!manualButton) {
+      manualButton = document.createElement('button');
+      manualButton.type = 'button';
+      manualButton.dataset.gasSwitch = '';
+      manualButton.style.cssText = 'position:fixed;top:max(16px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:2147483647;max-width:calc(100vw - 32px);padding:8px 14px;border:1px solid #57606a;border-radius:8px;background:Canvas;color:CanvasText;font:14px/1.4 system-ui;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 8px #0003';
+      manualButton.addEventListener('click', () => {
+        if (busy || !manualButtonSnapshot) return;
+        const snapshot = manualButtonSnapshot;
+        manualButton.disabled = true;
+        void check({ manual: snapshot });
+      });
+      document.body.append(manualButton);
+    } else if (!manualButton.isConnected) document.body.append(manualButton);
+    manualButtonSnapshot = { url: url.href, serialized: JSON.stringify(config), target, activation };
+    manualButton.disabled = false;
+    manualButton.textContent = `@${target} 계정으로 전환`;
+  }
+
+  async function check(options = {}) {
+    const manual = options.manual ?? null;
+    if (!manual) refreshManualButton();
+    if (!active() || busy || editing || pendingEdits()) { refreshManualButton(); return; }
+    const config = settings();
+    if (!config || (config.enabled === false && !manual)) return;
+    const url = new URL(location.href);
+    if (isAuthentication(url.pathname) || isSystem(url.pathname)) { refreshManualButton(); return; }
     const serialized = JSON.stringify(config);
+    if (manual && (manual.url !== url.href || manual.serialized !== serialized || manual.activation !== activation
+      || targetAccount(url, config) !== manual.target || config.enabled !== false)) { refreshManualButton(); return; }
     const key = `${url.href}\n${activation}\n${serialized}`;
-    if (lastKey === key) return;
-    lastKey = key;
+    if (!manual && lastKey === key) return;
+    if (!manual) lastKey = key;
+    const expectedActivation = manual?.activation ?? activation;
     const valid = () => active() && !editing && !pendingEdits() && location.href === url.href
-      && JSON.stringify(settings()) === serialized;
+      && activation === expectedActivation && JSON.stringify(settings()) === serialized
+      && (!manual || (manual.url === location.href && manual.target === targetAccount(url, settings())));
     busy = true;
+    refreshManualButton();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8_000);
     try {
-      const target = targetAccount(url, config);
+      const target = manual?.target ?? targetAccount(url, config);
       // A background tab's meta tag may describe the previous shared session.
       // Check the server before using any menu cached in that tab.
       const response = await fetch('/', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
@@ -310,6 +348,7 @@
     } finally {
       clearTimeout(timeout);
       busy = false;
+      refreshManualButton();
     }
   }
 
@@ -329,6 +368,7 @@
     if (!config) { openSettings(); return; }
     config.enabled = config.enabled === false;
     GM_setValue('settings', config);
+    refreshManualButton();
     lastKey = '';
     notice(config.enabled ? '자동 전환을 켰습니다.' : '자동 전환을 껐습니다.');
     void check();
@@ -340,12 +380,19 @@
     if (control && !control.closest('[data-gas-settings]') && !control.matches('input[type="search"]')) {
       editedControls.add(control);
       lastKey = '';
+      refreshManualButton();
     }
   };
   document.addEventListener('input', markEdited, true);
   document.addEventListener('change', markEdited, true);
-  const activate = () => { activation++; void check(); };
+  const activate = () => {
+    const nowActive = active();
+    if (nowActive && !wasActive) activation++;
+    wasActive = nowActive;
+    void check();
+  };
   window.addEventListener('focus', activate);
+  window.addEventListener('blur', activate);
   document.addEventListener('visibilitychange', activate);
   for (const name of ['turbo:load', 'pjax:end']) document.addEventListener(name, () => { void check(); });
   window.addEventListener('popstate', () => { void check(); });

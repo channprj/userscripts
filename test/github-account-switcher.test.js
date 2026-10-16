@@ -38,6 +38,7 @@ function setup(t, options = {}) {
   const clicks = [];
   const intervals = [];
   const writes = [];
+  let fetchCalls = 0;
   let focused = options.focused ?? true;
   let visible = options.visible ?? true;
   Object.defineProperty(document, 'visibilityState', { get: () => visible ? 'visible' : 'hidden' });
@@ -53,6 +54,8 @@ function setup(t, options = {}) {
     ok: true, url: 'https://github.com/',
     text: async () => `<meta name="user-login" content="${options.session ?? options.current ?? 'sample-personal'}">`,
   }));
+  const fetchImpl = window.fetch;
+  window.fetch = (...args) => { fetchCalls++; return fetchImpl(...args); };
   const userButton = document.querySelector('header button');
   userButton.addEventListener('click', () => {
     const existing = document.querySelector('[data-fixture-navigation]');
@@ -91,13 +94,25 @@ function setup(t, options = {}) {
     for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
   };
   return {
-    window, document, values, menus, clicks, writes, errors, flush,
+    window, document, values, menus, clicks, writes, errors, flush, get fetchCalls() { return fetchCalls; },
     async tick() { for (const fn of intervals) fn(); await flush(); },
     async settle() { await new Promise(resolve => setTimeout(resolve, 35)); await flush(); },
     async navigate(route) { window.history.pushState({}, '', route); await this.tick(); },
     async activate() {
       visible = true; focused = true;
       document.dispatchEvent(new window.Event('visibilitychange'));
+      window.dispatchEvent(new window.Event('focus'));
+      await this.tick();
+    },
+    async deactivate() {
+      visible = false; focused = false;
+      document.dispatchEvent(new window.Event('visibilitychange'));
+      await this.tick();
+    },
+    async blurRefocus() {
+      focused = false;
+      window.dispatchEvent(new window.Event('blur'));
+      focused = true;
       window.dispatchEvent(new window.Event('focus'));
       await this.tick();
     },
@@ -365,5 +380,192 @@ test('deleting settings removes stored mappings and stops switching', async t =>
   h.document.querySelector('[data-gas-reset]').click();
   assert.equal(h.values.has('settings'), false);
   await h.navigate('/sample-team/repo');
+  assert.equal(h.clicks.length, 0);
+});
+
+
+test('disabled automatic switching offers a manual button without background checks', async t => {
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  const button = h.document.querySelector('[data-gas-switch]');
+  assert.ok(button);
+  assert.equal(button.textContent, '@sample-work 계정으로 전환');
+  assert.equal(h.fetchCalls, 0);
+  await h.tick();
+  assert.equal(h.fetchCalls, 0);
+  assert.equal(h.document.querySelectorAll('[data-gas-switch]').length, 1);
+  button.click();
+  await h.flush();
+  assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+  assert.equal(h.values.get('settings').enabled, false);
+});
+
+test('manual button tracks navigation and disappears when target is already current', async t => {
+  const h = setup(t, {route:'/', current:'sample-work', values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch]')?.textContent, '@sample-personal 계정으로 전환');
+  await h.navigate('/sample-team/repo');
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+});
+
+
+test('a retained manual button cannot retarget after SPA navigation', async t => {
+  const h = setup(t, {route:'/sample-team/repo', values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  const oldButton = h.document.querySelector('[data-gas-switch]');
+  await h.navigate('/another-owner/repo');
+  oldButton.click();
+  await h.flush();
+  assert.deepEqual(h.clicks, []);
+  assert.equal(h.fetchCalls, 0);
+});
+
+test('manual clicks are single flight', async t => {
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  const button = h.document.querySelector('[data-gas-switch]');
+  button.click(); button.click();
+  await h.flush();
+  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.clicks.length, 1);
+});
+
+for (const options of [
+  {route:'/login'},
+  {route:'/settings/profile'},
+  {focused:false, visible:false},
+  {current:''},
+  {values:new Map()},
+]) {
+  test(`manual switch button stays hidden for ineligible page state: ${JSON.stringify(options)}`, async t => {
+    const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]]), ...options});
+    await h.flush();
+    assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  });
+}
+
+test('manual button hides while settings are open and returns after cancel', async t => {
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  h.document.querySelector('[data-gas-cancel]').click();
+  await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch]')?.textContent, '@sample-work 계정으로 전환');
+});
+
+test('manual button hides after an edited page control is marked', async t => {
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  const control = h.document.createElement('textarea');
+  h.document.querySelector('main').append(control);
+  control.dispatchEvent(new h.window.Event('input', {bubbles:true}));
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+});
+
+test('manual button is restored enabled after an offline failure and can be retried explicitly', async t => {
+  let calls = 0;
+  const h = setup(t, {
+    values:new Map([['settings',{...config,enabled:false}]]),
+    fetch:async () => {
+      calls++;
+      if (calls === 1) throw new Error('offline');
+      return {ok:true,url:'https://github.com/',text:async()=>'<meta name="user-login" content="sample-personal">'};
+    },
+  });
+  await h.flush();
+  const button = h.document.querySelector('[data-gas-switch]');
+  button.click();
+  await h.flush();
+  assert.equal(button.disabled, false);
+  assert.equal(h.document.querySelector('[data-gas-switch]'), button);
+  button.click();
+  await h.flush();
+  assert.equal(calls, 2);
+  assert.equal(h.clicks.length, 1);
+  assert.equal(h.values.get('settings').enabled, false);
+});
+
+for (const mutation of ['route', 'settings', 'edit', 'activation']) {
+  test(`manual session verification cancels when ${mutation} changes`, async t => {
+    let resolveFetch;
+    const h = setup(t, {
+      values:new Map([['settings',{...config,enabled:false}]]),
+      fetch:() => new Promise(resolve => { resolveFetch = resolve; }),
+    });
+    await h.flush();
+    const button = h.document.querySelector('[data-gas-switch]');
+    button.click();
+    assert.equal(button.disabled, true);
+    assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+    if (mutation === 'route') await h.navigate('/another-owner/repo');
+    if (mutation === 'settings') h.values.set('settings', {...config,personal:'other-personal',enabled:false});
+    if (mutation === 'edit') {
+      const control = h.document.createElement('textarea');
+      h.document.querySelector('main').append(control);
+      control.dispatchEvent(new h.window.Event('input', {bubbles:true}));
+    }
+    if (mutation === 'activation') await h.deactivate();
+    resolveFetch({ok:true,url:'https://github.com/',text:async()=>'<meta name="user-login" content="sample-personal">'});
+    await h.flush();
+    assert.equal(h.clicks.length, 0);
+  });
+}
+
+test('manual switching keeps the recent-attempt cooldown', async t => {
+  const values = new Map([
+    ['settings',{...config,enabled:false}],
+    ['attempt',{target:'sample-work',at:Date.now()}],
+  ]);
+  const h = setup(t, {values});
+  await h.flush();
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
+  assert.equal(h.clicks.length, 0);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /반복 전환/);
+});
+
+test('manual switching preserves the stale-session reload guard', async t => {
+  const h = setup(t, {
+    values:new Map([['settings',{...config,enabled:false}]]),
+    current:'sample-personal', session:'sample-other', expectReload:true,
+  });
+  await h.flush();
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
+  assert.equal(h.clicks.length, 0);
+  assert.equal(h.values.has('refresh'), true);
+  assert.equal(h.errors.length, 1);
+});
+
+test('saving, resetting, and toggling settings refreshes the manual button', async t => {
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
+  await h.flush();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  const dialog = h.document.querySelector('[data-gas-settings]');
+  dialog.querySelector('[name="enabled"]').checked = true;
+  dialog.querySelector('form').dispatchEvent(new h.window.Event('submit', {cancelable:true}));
+  await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  h.menus.get('GitHub Account Switcher: 자동 전환 켜기/끄기')();
+  await h.flush();
+  assert.ok(h.document.querySelector('[data-gas-switch]'));
+  h.menus.get('GitHub Account Switcher: 설정')();
+  h.document.querySelector('[data-gas-reset]').click();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+});
+
+
+test('manual verification is cancelled by blur and refocus without visibility changes', async t => {
+  let resolveFetch;
+  const h = setup(t, {
+    values:new Map([['settings',{...config,enabled:false}]]),
+    fetch:() => new Promise(resolve => { resolveFetch = resolve; }),
+  });
+  await h.flush();
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.blurRefocus();
+  resolveFetch({ok:true,url:'https://github.com/',text:async()=>'<meta name="user-login" content="sample-personal">'});
+  await h.flush();
   assert.equal(h.clicks.length, 0);
 });
