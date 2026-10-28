@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.6.2
+// @version      0.6.3
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -38,6 +38,9 @@
   // GitHub's header loads the signed-in account from this small JSON payload.
   const PAYLOADS_PATH = '/_global-navigation/payloads.json';
   const SESSION_TIMEOUT = 8_000;
+  // Per-tab marker of the last reload for an account changed in another tab.
+  const RELOAD_KEY = 'github-account-switcher:reloaded';
+  const RELOAD_GUARD = 10_000;
   const SWITCH_TIMEOUT = 15_000;
   const COUNTDOWN_SECONDS = 4;
   let busy = false;
@@ -55,6 +58,8 @@
   let countdownState = null;
   let lastKey = '';
   let activation = 0;
+  // The server's account, as last asked during the current activation.
+  let confirmed = null;
   let wasActive;
   let editing = false;
   const editedControls = new Set();
@@ -65,6 +70,20 @@
   const active = () => document.visibilityState === 'visible' && document.hasFocus();
   wasActive = active();
   const login = doc => normalized(doc.querySelector('meta[name="user-login"]')?.content);
+
+  // GitHub raises this banner when another tab signs in, signs out or switches
+  // accounts, so the page markup may no longer name the signed-in account.
+  function staleBanner() {
+    const banner = document.querySelector('.js-stale-session-flash');
+    return !!banner && !banner.hidden;
+  }
+
+  // The account the page acts for: the server's answer during this activation, the
+  // page markup otherwise, or unknown while GitHub flags the page as stale.
+  function sessionLogin() {
+    if (confirmed?.activation === activation) return confirmed.login;
+    return staleBanner() ? '' : login(document);
+  }
 
   function pendingEdits() {
     for (const control of editedControls) if (!control.isConnected) editedControls.delete(control);
@@ -369,6 +388,21 @@
     else location.reload();
   }
 
+  function switched(target) {
+    confirmed = { login: target, activation };
+    leavePage();
+  }
+
+  // Reload a page whose account another tab changed. A tab still stale right after
+  // such a reload stops instead of looping; other tabs keep their own guard.
+  function reloadStalePage() {
+    let previous = 0;
+    try { previous = Number(sessionStorage.getItem(RELOAD_KEY)) || 0; } catch {}
+    if (Date.now() - previous < RELOAD_GUARD) throw new Error('다른 탭의 계정 변경을 확인했습니다. 이 페이지를 새로고침해주세요.');
+    try { sessionStorage.setItem(RELOAD_KEY, String(Date.now())); } catch {}
+    location.reload();
+  }
+
   async function switchAccount(target, accounts, valid) {
     if (!accounts) { await switchWithMenu(target, valid); return; }
     const account = accounts.find(account => normalized(account.login) === target);
@@ -385,7 +419,7 @@
       const response = await fetch(SWITCH_PATH, { method: 'POST', credentials: 'same-origin', headers: verifiedHeaders(), body, signal: postSignal });
       return { ok: response.ok, data: await response.json() };
     }).catch(() => null);
-    if (result?.ok && result.data?.success) { leavePage(); return; }
+    if (result?.ok && result.data?.success) { switched(target); return; }
     if (result?.data?.reason === 'emu_sso_redirect' && typeof result.data.redirect_to === 'string') {
       let redirect = null;
       try { redirect = new URL(result.data.redirect_to, location.href); } catch {}
@@ -397,7 +431,7 @@
       throw new Error(`계정을 전환하지 못했습니다: ${result.data.error.trim()}`);
     }
     // Without a clear answer the switch may still have happened, so trust the server session.
-    if (await withTimeout(SESSION_TIMEOUT, currentLogin) === target) { leavePage(); return; }
+    if (await withTimeout(SESSION_TIMEOUT, currentLogin) === target) { switched(target); return; }
     throw new Error('계정을 전환하지 못했습니다. Account switcher에서 계정을 다시 추가하거나 다시 로그인해주세요.');
   }
 
@@ -475,7 +509,7 @@
     }
     observedManualContext = context;
     const eligible = !!config && !isAutomatic(config, target) && active() && !editing && !pendingEdits()
-      && !busy && !!login(document) && login(document) !== target
+      && !busy && !!sessionLogin() && sessionLogin() !== target
       && !isAuthentication(url.pathname) && !isSystem(url.pathname);
     if (!eligible || dismissedManualContext === context) { hideManualControls(); return; }
     if (!manualControls) {
@@ -531,12 +565,16 @@
     if (!config) return;
     const url = new URL(location.href);
     const target = targetAccount(url, config);
-    if (!isAutomatic(config, target) && !manual) { refreshManualButton(); return; }
-    if (isAuthentication(url.pathname) || isSystem(url.pathname)) { refreshManualButton(); return; }
+    // Switching follows the page's rule; a page GitHub flags as stale is also
+    // brought back in line where nothing would be switched.
+    const holding = isSystem(url.pathname);
+    const switching = !holding && (!!manual || isAutomatic(config, target));
+    const stale = staleBanner();
+    if (isAuthentication(url.pathname) || (!switching && !stale)) { refreshManualButton(); return; }
     const serialized = JSON.stringify(config);
     if (manual && (manual.url !== url.href || manual.serialized !== serialized || manual.activation !== activation
       || target !== manual.target || isAutomatic(config, target))) { refreshManualButton(); return; }
-    const key = `${url.href}\n${activation}\n${serialized}`;
+    const key = `${url.href}\n${activation}\n${serialized}\n${stale}`;
     if (!manual && lastKey === key) return;
     if (!manual) lastKey = key;
     const expectedActivation = manual?.activation ?? activation;
@@ -554,7 +592,7 @@
       // the server. A countdown's last second has usually asked already; if that
       // failed, ask once more, since the network may be back by now.
       const prefetched = manual ? options.state : null;
-      let state = prefetched ?? serverState(login(document) !== switchTarget, controller.signal);
+      let state = prefetched ?? serverState(switching && (stale || login(document) !== switchTarget), controller.signal);
       const current = await state.login.catch(error => {
         if (state !== prefetched) throw error;
         state = serverState(true, controller.signal);
@@ -562,22 +600,22 @@
       });
       if (!valid()) return;
       if (!current) throw new Error('GitHub 로그인이 필요합니다. 계정들을 먼저 로그인해주세요.');
-      if (current !== login(document)) {
-        const refresh = GM_getValue('refresh', 0);
-        if (Date.now() - refresh < 10_000) throw new Error('다른 탭의 계정 변경을 확인했습니다. 이 페이지를 새로고침해주세요.');
-        GM_setValue('refresh', Date.now());
-        location.reload();
-        return;
-      }
+      confirmed = { login: current, activation: expectedActivation };
       const previous = GM_getValue('attempt', null);
-      if (current === switchTarget) {
-        if (previous?.target === switchTarget) GM_deleteValue('attempt');
+      // Another tab may already have chosen the right account; then the page only
+      // needs the reload GitHub's banner asks for.
+      if (holding || current === switchTarget) {
+        if (current !== login(document) || staleBanner()) reloadStalePage();
+        else if (!holding && previous?.target === switchTarget) GM_deleteValue('attempt');
         return;
       }
+      // Without automatic switching the button counts down first. A stale page
+      // switches as it is, since the reload after the switch refreshes it.
+      if (!switching) return;
       if (previous && Date.now() - previous.at < (previous.target === switchTarget ? SWITCH_COOLDOWN : 2_000)) {
         throw new Error('반복 전환을 멈췄습니다. 계정 상태를 확인한 뒤 매니저 메뉴에서 다시 시도를 눌러주세요.');
       }
-      const accounts = await state.accounts?.catch(error => {
+      const accounts = await (state.accounts ?? stashedAccounts(controller.signal)).catch(error => {
         if (state !== prefetched) throw error;
         return stashedAccounts(controller.signal);
       });
@@ -595,7 +633,7 @@
   GM_registerMenuCommand(`${NAME}: 설정`, openSettings);
   GM_registerMenuCommand(`${NAME}: 다시 시도`, () => {
     GM_deleteValue('attempt');
-    GM_deleteValue('refresh');
+    try { sessionStorage.removeItem(RELOAD_KEY); } catch {}
     if (pendingEdits()) {
       notice('입력 중인 내용을 보호하기 위해 전환을 보류했습니다. 내용을 저장한 뒤 페이지를 새로고침해주세요.');
       return;

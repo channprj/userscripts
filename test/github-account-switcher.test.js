@@ -17,6 +17,12 @@ const enterpriseConfig = {
 };
 
 const json = (status, body, url) => ({ ok: status >= 200 && status < 300, status, url, json: async () => body });
+const RELOAD_KEY = 'github-account-switcher:reloaded';
+// sessionStorage outlives a reload within one tab, so a reloaded page starts with it.
+const tabStorage = h => Object.fromEntries(Array.from({length:h.window.sessionStorage.length}, (_, index) => {
+  const key = h.window.sessionStorage.key(index);
+  return [key, h.window.sessionStorage.getItem(key)];
+}));
 
 // Sanitized fixture based on GitHub's React user navigation / account menu and
 // the stashed-account and switch endpoints that menu uses.
@@ -28,20 +34,22 @@ function setup(t, options = {}) {
   // jsdom reports reloads and redirects as unimplemented navigation.
   virtualConsole.on('jsdomError', error => (/navigation/i.test(error.message) ? navigations : errors).push(error));
   const dom = new JSDOM(`<!doctype html><meta name="user-login" content="${options.current ?? 'sample-personal'}"><meta name="fetch-nonce" content="v2:page-nonce"><meta name="release" content="fixture-release">
+    <div hidden class="js-stale-session-flash flash flash-warn"><span class="js-stale-session-flash-switched" hidden>You switched accounts on another tab or window. <a href="">Reload</a> to refresh your session.</span></div>
     <header><button aria-labelledby="user-menu-label" data-login="sample-personal">Profile</button><span id="user-menu-label" hidden>Open user navigation menu</span></header><main>${options.draft ? '<textarea>draft</textarea>' : ''}</main>`, {
     url: `https://github.com${options.route ?? '/sample-team/repo/pull/42?tab=files#diff-1'}`,
     runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole,
   });
   let switched = 0;
   t.after(() => {
+    const reloaded = dom.window.sessionStorage.getItem(RELOAD_KEY) !== (options.tab?.[RELOAD_KEY] ?? null);
     dom.window.close();
     assert.deepEqual(errors, []);
-    // Every reload must come from a completed switch or the stale-page guard.
-    assert.equal(navigations.length, options.navigations ?? switched + writes.filter(key => key === 'refresh').length,
-      'unexpected page navigation');
+    // Every reload must come from a completed switch or the guarded stale-page reload.
+    assert.equal(navigations.length, options.navigations ?? switched + Number(reloaded), 'unexpected page navigation');
   });
   const { window } = dom;
   const { document } = window;
+  for (const [key, value] of Object.entries(options.tab ?? {})) window.sessionStorage.setItem(key, value);
   const values = options.values ?? new Map([['settings', structuredClone(config)]]);
   const menus = new Map();
   const switches = [];
@@ -186,6 +194,14 @@ function setup(t, options = {}) {
       for (const fn of due) fn();
       await flush();
     },
+    get reloaded() { return window.sessionStorage.getItem(RELOAD_KEY) !== (options.tab?.[RELOAD_KEY] ?? null); },
+    // GitHub's BroadcastChannel handler reveals this banner when another tab switches.
+    async banner() {
+      const banner = document.querySelector('.js-stale-session-flash');
+      banner.hidden = false;
+      banner.querySelector('.js-stale-session-flash-switched').hidden = false;
+      await this.tick();
+    },
     countdown() {
       const label = document.querySelector('[data-gas-switch-countdown]');
       return label && !label.hidden ? label.textContent : null;
@@ -275,10 +291,10 @@ test('the signed-in account is requested while stashed sessions are still loadin
   assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
 });
 
-test('a stale page reloads even when the account list fails', async t => {
-  const h = setup(t, {session:'sample-other', sidePanel:() => Promise.reject(new TypeError('Failed to fetch'))});
+test('a stale page already on the target account reloads even when the account list fails', async t => {
+  const h = setup(t, {session:'sample-work', sidePanel:() => Promise.reject(new TypeError('Failed to fetch'))});
   await h.flush();
-  assert.equal(h.values.has('refresh'), true);
+  assert.equal(h.reloaded, true);
   assert.equal(h.document.querySelector('[data-gas-notice]'), null);
   assert.deepEqual(h.requests, []);
 });
@@ -293,7 +309,7 @@ test('a signed-out session is reported without waiting for the account list', as
 test('a login with capitals from the navigation payload matches the page login', async t => {
   const h = setup(t, {current:'Sample-Personal'});
   await h.flush();
-  assert.equal(h.values.has('refresh'), false);
+  assert.equal(h.reloaded, false);
   assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
 });
 
@@ -736,14 +752,34 @@ for (const html of ['<textarea>draft</textarea>', '<select><option value="a">A</
   });
 }
 
-test('stale account markup reloads before any account click', async t => {
-  const h = setup(t, {current:'sample-personal', session:'sample-other'}); await h.flush();
-  assert.equal(h.switches.length, 0);
+test('stale account markup switches from the page as it is without reloading first', async t => {
+  const h = setup(t, {current:'sample-personal', session:'sample-other', accounts:['sample-personal', 'sample-work', 'sample-other']});
+  await h.flush();
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
   assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
+  assert.equal(h.reloaded, false);
   assert.equal(h.navigations.length, 1);
-  const next = setup(t, {current:'sample-personal', session:'sample-other', values:h.values}); await next.flush();
-  assert.equal(next.switches.length, 0);
+});
+
+test('a stale page already on the target account reloads once instead of switching', async t => {
+  const h = setup(t, {current:'sample-personal', session:'sample-work'}); await h.flush();
+  assert.deepEqual(h.requests, []);
+  assert.equal(h.reloaded, true);
+  assert.equal(h.navigations.length, 1);
+});
+
+test('a tab still stale right after its own reload stops instead of looping', async t => {
+  const h = setup(t, {current:'sample-personal', session:'sample-work'}); await h.flush();
+  const next = setup(t, {current:'sample-personal', session:'sample-work', values:h.values, tab:tabStorage(h)}); await next.flush();
+  assert.equal(next.navigations.length, 0);
   assert.match(next.document.querySelector('[data-gas-notice]').textContent, /새로고침/);
+});
+
+test('a reload in another tab never blocks this tab from reloading', async t => {
+  const h = setup(t, {current:'sample-personal', session:'sample-work'}); await h.flush();
+  const other = setup(t, {current:'sample-personal', session:'sample-work', values:h.values}); await other.flush();
+  assert.equal(other.reloaded, true);
+  assert.equal(other.document.querySelector('[data-gas-notice]'), null);
 });
 
 test('signed-out sessions do not switch accounts', async t => {
@@ -1006,21 +1042,33 @@ test('manual switching keeps the recent-attempt cooldown', async t => {
   assert.match(h.document.querySelector('[data-gas-notice]').textContent, /반복 전환/);
 });
 
-test('manual switching preserves the stale-session reload guard', async t => {
+test('a manual switch from stale markup switches without reloading first', async t => {
   const h = setup(t, {
     values:new Map([['settings',{...config,enabled:false}]]),
-    current:'sample-personal', session:'sample-other',
+    current:'sample-personal', session:'sample-other', accounts:['sample-personal', 'sample-work', 'sample-other'],
   });
   await h.flush();
   h.document.querySelector('[data-gas-switch]').click();
   await h.flush();
-  assert.equal(h.switches.length, 0);
-  assert.equal(h.values.has('refresh'), true);
-  assert.equal(h.navigations.length, 1);
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+  assert.equal(h.reloaded, false);
+});
+
+test('a manual switch on a page already changed to the target by another tab only reloads', async t => {
+  const h = setup(t, {
+    values:new Map([['settings',{...config,enabled:false}]]),
+    current:'sample-personal', session:'sample-work',
+  });
+  await h.flush();
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
+  assert.deepEqual(h.requests, []);
+  assert.equal(h.reloaded, true);
 });
 
 test('saving, resetting, and toggling settings refreshes the manual button', async t => {
-  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
+  // The automatic switch after saving fails, so the page keeps its account.
+  const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]]), accounts:['sample-personal']});
   await h.flush();
   h.menus.get('GitHub Account Switcher: 설정')();
   const dialog = h.document.querySelector('[data-gas-settings]');
@@ -1363,17 +1411,19 @@ test('a countdown restarted after refocus asks the server only in its own last s
   assert.deepEqual([h.fetchCalls, h.panelCalls], [2, 2]);
 });
 
-test('a session change before the last second reloads the stale page instead of switching', async t => {
-  let session = 'sample-personal';
-  const h = setup(t, {values:manualSettings(), fetch:async () => ({ok:true, url:'https://github.com/', text:async()=>`<meta name="user-login" content="${session}">`})});
-  await h.flush();
-  await h.second();
-  session = 'sample-work-extra';
-  await advance(h, COUNTDOWN - 1);
-  assert.deepEqual(h.requests, []);
-  assert.equal(h.values.has('refresh'), true);
-  assert.equal(h.navigations.length, 1);
-});
+for (const [session, outcome] of [['sample-work-extra', 'switches straight from the stale page'], ['sample-work', 'only reloads when it is already the target']]) {
+  test(`a session change before the last second ${outcome}`, async t => {
+    let current = 'sample-personal';
+    const h = setup(t, {values:manualSettings(), fetch:async () => ({ok:true, url:'https://github.com/', text:async()=>`<meta name="user-login" content="${current}">`})});
+    await h.flush();
+    await h.second();
+    current = session;
+    await advance(h, COUNTDOWN - 1);
+    assert.equal(h.requests.length, session === 'sample-work' ? 0 : 1);
+    assert.equal(h.reloaded, session === 'sample-work');
+    assert.equal(h.navigations.length, 1);
+  });
+}
 
 test('a failed last-second prefetch is asked again when the countdown ends', async t => {
   let calls = 0;
@@ -1450,4 +1500,108 @@ test('automatic switching never shows a countdown', async t => {
   const h = setup(t); await h.flush();
   assert.equal(h.document.querySelector('[data-gas-switch-countdown]'), null);
   assert.equal(h.switches.length, 1);
+});
+
+test('a banner from another tab\'s switch hides the button until the server names the account', async t => {
+  let release;
+  const h = setup(t, {values:manualSettings(), fetch:() => new Promise(resolve => { release = resolve; })});
+  await h.flush();
+  assert.ok(h.document.querySelector('[data-gas-switch]'));
+  assert.equal(h.fetchCalls, 0);
+  await h.banner();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 0]);
+  release({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-work">'});
+  await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  assert.equal(h.reloaded, true);
+  assert.deepEqual(h.requests, []);
+});
+
+test('a page made stale on its own account counts down and switches back without reloading first', async t => {
+  const h = setup(t, {route:'/', values:manualSettings(), session:'sample-work'});
+  await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  assert.equal(h.fetchCalls, 0);
+  await h.banner();
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 0]);
+  assert.equal(h.document.querySelector('[data-gas-switch-label]')?.textContent, '@sample-personal 계정으로 전환');
+  assert.equal(h.countdown(), '4초');
+  await advance(h, COUNTDOWN);
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-personal']);
+  assert.equal(h.reloaded, false);
+});
+
+test('a stale page asks the server again after each activation', async t => {
+  const h = setup(t, {route:'/', values:manualSettings(), session:'sample-work'});
+  await h.flush();
+  await h.banner();
+  await h.tick();
+  assert.equal(h.fetchCalls, 1);
+  await h.deactivate();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  await h.activate();
+  assert.equal(h.fetchCalls, 2);
+  assert.equal(h.document.querySelector('[data-gas-switch-label]')?.textContent, '@sample-personal 계정으로 전환');
+});
+
+test('automatic switching from a stale banner asks for the account and the list together', async t => {
+  let release;
+  const h = setup(t, {route:'/', session:'sample-work', visible:false, focused:false,
+    fetch:() => new Promise(resolve => { release = resolve; })});
+  await h.flush();
+  await h.banner();
+  assert.equal(h.fetchCalls, 0);
+  await h.activate();
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 1]);
+  release({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-work">'});
+  await h.flush();
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-personal']);
+  assert.equal(h.reloaded, false);
+});
+
+for (const route of ['/notifications', '/settings/profile']) {
+  test(`a stale system page reloads without switching: ${route}`, async t => {
+    const h = setup(t, {route, values:manualSettings(), session:'sample-work'});
+    await h.flush();
+    assert.equal(h.fetchCalls, 0);
+    await h.banner();
+    assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 0]);
+    assert.equal(h.reloaded, true);
+    assert.deepEqual(h.requests, []);
+  });
+}
+
+test('a banner on a page whose account was switched back still reloads to clear it', async t => {
+  const h = setup(t, {route:'/', values:manualSettings()});
+  await h.flush();
+  await h.banner();
+  assert.equal(h.reloaded, true);
+  assert.deepEqual(h.requests, []);
+});
+
+test('a stale banner on an authentication page is left alone', async t => {
+  const h = setup(t, {route:'/login', values:manualSettings(), session:'sample-work'});
+  await h.flush();
+  await h.banner();
+  assert.equal(h.fetchCalls, 0);
+  assert.equal(h.reloaded, false);
+});
+
+test('a stale banner in a background tab waits for activation', async t => {
+  const h = setup(t, {route:'/', values:manualSettings(), session:'sample-work', visible:false, focused:false});
+  await h.flush();
+  await h.banner();
+  assert.equal(h.fetchCalls, 0);
+  await h.activate();
+  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.document.querySelector('[data-gas-switch-label]')?.textContent, '@sample-personal 계정으로 전환');
+});
+
+test('a stale banner never reloads a page with a draft', async t => {
+  const h = setup(t, {route:'/', values:manualSettings(), session:'sample-work', draft:true});
+  await h.flush();
+  await h.banner();
+  assert.equal(h.fetchCalls, 0);
+  assert.equal(h.reloaded, false);
 });
