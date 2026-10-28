@@ -65,7 +65,16 @@ function setup(t, options = {}) {
   window.GM_registerMenuCommand = (label, action) => menus.set(label, action);
   window.setInterval = fn => { intervals.push(fn); return intervals.length; };
   const timeout = window.setTimeout.bind(window);
-  window.setTimeout = (fn, ms) => timeout(fn, Math.min(ms, 20));
+  const clear = window.clearTimeout.bind(window);
+  // Whole-second countdown steps run only when a test advances them.
+  const seconds = new Map();
+  let nextSecond = 0;
+  window.setTimeout = (fn, ms) => {
+    if (ms !== 1_000) return timeout(fn, Math.min(ms, 20));
+    seconds.set(--nextSecond, fn);
+    return nextSecond;
+  };
+  window.clearTimeout = id => { if (!seconds.delete(id)) clear(id); };
   const sessionFetch = options.fetch ?? (async () => ({
     ok: true, url: 'https://github.com/',
     text: async () => `<meta name="user-login" content="${sessionLogin}"><meta name="fetch-nonce" content="v2:session-nonce">`,
@@ -158,6 +167,16 @@ function setup(t, options = {}) {
     get fetchCalls() { return fetchCalls; }, get panelCalls() { return panelCalls; },
     async tick() { for (const fn of intervals) fn(); await flush(); },
     async settle() { await new Promise(resolve => setTimeout(resolve, 35)); await flush(); },
+    async second() {
+      const due = [...seconds.values()];
+      seconds.clear();
+      for (const fn of due) fn();
+      await flush();
+    },
+    countdown() {
+      const label = document.querySelector('[data-gas-switch-countdown]');
+      return label && !label.hidden ? label.textContent : null;
+    },
     async navigate(route) { window.history.pushState({}, '', route); await this.tick(); },
     async navigateWithoutTick(route) { window.history.pushState({}, '', route); await flush(); },
     async activate() {
@@ -765,7 +784,7 @@ test('disabled automatic switching offers a manual button without background che
   await h.flush();
   const button = h.document.querySelector('[data-gas-switch]');
   assert.ok(button);
-  assert.equal(button.textContent, '@sample-work 계정으로 전환');
+  assert.equal(button.querySelector('[data-gas-switch-label]').textContent, '@sample-work 계정으로 전환');
   assert.equal(h.fetchCalls, 0);
   await h.tick();
   assert.equal(h.fetchCalls, 0);
@@ -779,7 +798,7 @@ test('disabled automatic switching offers a manual button without background che
 test('manual button tracks navigation and disappears when target is already current', async t => {
   const h = setup(t, {route:'/', current:'sample-work', values:new Map([['settings',{...config,enabled:false}]])});
   await h.flush();
-  assert.equal(h.document.querySelector('[data-gas-switch]')?.textContent, '@sample-personal 계정으로 전환');
+  assert.equal(h.document.querySelector('[data-gas-switch-label]')?.textContent, '@sample-personal 계정으로 전환');
   await h.navigate('/sample-team/repo');
   assert.equal(h.document.querySelector('[data-gas-switch]'), null);
 });
@@ -838,7 +857,7 @@ test('manual button hides while settings are open and returns after cancel', asy
   assert.equal(h.document.querySelector('[data-gas-switch]'), null);
   h.document.querySelector('[data-gas-cancel]').click();
   await h.flush();
-  assert.equal(h.document.querySelector('[data-gas-switch]')?.textContent, '@sample-work 계정으로 전환');
+  assert.equal(h.document.querySelector('[data-gas-switch-label]')?.textContent, '@sample-work 계정으로 전환');
 });
 
 test('manual button hides after an edited page control is marked', async t => {
@@ -984,9 +1003,20 @@ test('manual switch controls share a wrapper and dismiss without side effects un
   await h.flush();
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
 
+  // Anchors and other pages that need the same account keep the dismissal.
+  for (const route of ['/sample-team/repo/pull/42?tab=files#diff-2', '/sample-team/repo/issues']) {
+    await h.navigate(route);
+    assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+  }
+  for (let i = 0; i < 6; i++) await h.second();
+  await h.tick();
+  assert.equal(h.fetchCalls, fetchCalls);
+  assert.deepEqual(h.switches, []);
+
+  await h.navigate('/another-owner/repo');
   await h.navigate('/sample-team/repo?view=changed');
   assert.ok(h.document.querySelector('[data-gas-switch-controls]'));
-  assert.equal(h.document.querySelector('[data-gas-switch]')?.textContent, '@sample-work 계정으로 전환');
+  assert.equal(h.document.querySelector('[data-gas-switch-label]')?.textContent, '@sample-work 계정으로 전환');
   h.document.querySelector('[data-gas-switch]').click();
   await h.flush();
   assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo?view=changed'}]);
@@ -1012,4 +1042,207 @@ test('dismissal resets after ineligible routes, settings changes, and reset', as
   h.document.querySelector('[data-gas-reset]').click();
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
   assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+});
+
+const manualSettings = () => new Map([['settings', {...config, enabled:false}]]);
+
+test('the manual button switches after a five-second countdown with a shrinking gauge', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  const gauge = h.document.querySelector('[data-gas-switch-gauge]');
+  assert.equal(h.countdown(), '5초');
+  assert.equal(gauge.hidden, false);
+  assert.equal(gauge.getAttribute('aria-hidden'), 'true');
+  assert.equal(gauge.style.transform, 'scaleX(0)');
+  assert.match(gauge.style.transition, /transform 5000ms linear|transform 5s linear/);
+  for (const remaining of ['4초', '3초', '2초', '1초']) {
+    await h.second();
+    assert.equal(h.countdown(), remaining);
+    assert.equal(h.fetchCalls, 0);
+  }
+  await h.tick();
+  assert.equal(h.countdown(), '1초');
+  await h.second();
+  assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+  assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
+  assert.equal(h.values.get('settings').enabled, false);
+});
+
+test('clicking during the countdown switches immediately and stops the countdown', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second();
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
+  assert.equal(h.switches.length, 1);
+  for (let i = 0; i < 5; i++) await h.second();
+  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.switches.length, 1);
+});
+
+test('dismissing cancels the countdown without switching', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second();
+  h.document.querySelector('[data-gas-switch-dismiss]').click();
+  for (let i = 0; i < 6; i++) await h.second();
+  await h.tick();
+  assert.equal(h.fetchCalls, 0);
+  assert.equal(h.switches.length, 0);
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+});
+
+test('the countdown stops while the tab is inactive and restarts from a full gauge', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second(); await h.second();
+  assert.equal(h.countdown(), '3초');
+  const gauge = h.document.querySelector('[data-gas-switch-gauge]');
+  await h.deactivate();
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+  for (let i = 0; i < 6; i++) await h.second();
+  assert.equal(h.fetchCalls, 0);
+  const atReflow = [];
+  gauge.getBoundingClientRect = () => { atReflow.push([gauge.style.transition, gauge.style.transform, gauge.hidden]); return {}; };
+  await h.activate();
+  assert.equal(h.countdown(), '5초');
+  assert.deepEqual(atReflow, [['none', 'scaleX(1)', false]]);
+  assert.equal(gauge.style.transform, 'scaleX(0)');
+  assert.match(gauge.style.transition, /transform 5000ms linear|transform 5s linear/);
+  for (let i = 0; i < 4; i++) await h.second();
+  assert.equal(h.switches.length, 0);
+  await h.second();
+  assert.equal(h.switches[0]?.account, 'sample-work');
+});
+
+test('a draft stops the countdown until the draft is gone', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second();
+  const control = h.document.createElement('textarea');
+  h.document.querySelector('main').append(control);
+  control.dispatchEvent(new h.window.Event('input', {bubbles:true}));
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+  for (let i = 0; i < 6; i++) await h.second();
+  await h.tick();
+  assert.equal(h.fetchCalls, 0);
+  control.remove();
+  await h.tick();
+  assert.equal(h.countdown(), '5초');
+  for (let i = 0; i < 5; i++) await h.second();
+  assert.equal(h.switches.length, 1);
+});
+
+test('open settings stop the countdown and closing them restarts it from five seconds', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second(); await h.second();
+  h.menus.get('GitHub Account Switcher: 설정')();
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+  for (let i = 0; i < 6; i++) await h.second();
+  await h.tick();
+  assert.equal(h.fetchCalls, 0);
+  h.document.querySelector('[data-gas-cancel]').click();
+  await h.flush();
+  assert.equal(h.countdown(), '5초');
+});
+
+const twoTargetSettings = () => new Map([['settings', {...config, enabled:false, rules:[...config.rules, {owner:'another-team', account:'sample-work-extra'}]}]]);
+
+test('a page needing another account restarts the countdown without the old timer', async t => {
+  const h = setup(t, {values:twoTargetSettings()});
+  await h.flush();
+  await h.second(); await h.second();
+  assert.equal(h.countdown(), '3초');
+  await h.navigate('/another-team/repo');
+  assert.equal(h.document.querySelector('[data-gas-switch-label]').textContent, '@sample-work-extra 계정으로 전환');
+  assert.equal(h.countdown(), '5초');
+  for (const remaining of ['4초', '3초', '2초', '1초']) {
+    await h.second();
+    assert.equal(h.countdown(), remaining);
+    assert.equal(h.fetchCalls, 0);
+  }
+  await h.second();
+  assert.deepEqual(h.switches, [{account:'sample-work-extra', url:'https://github.com/another-team/repo'}]);
+});
+
+test('pages needing the same account keep the running countdown', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second(); await h.second();
+  await h.navigate('/sample-team/repo/issues#issuecomment-1');
+  assert.equal(h.countdown(), '3초');
+  await h.second(); await h.second();
+  assert.equal(h.fetchCalls, 0);
+  await h.second();
+  assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/issues#issuecomment-1'}]);
+});
+
+test('dismissing a countdown started after navigation cancels it', async t => {
+  const h = setup(t, {values:twoTargetSettings()});
+  await h.flush();
+  await h.second(); await h.second();
+  await h.navigate('/another-team/repo');
+  h.document.querySelector('[data-gas-switch-dismiss]').click();
+  for (let i = 0; i < 6; i++) await h.second();
+  await h.tick();
+  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.switches, []);
+});
+
+test('a failed countdown switch leaves the button for an explicit retry without counting again', async t => {
+  const h = setup(t, {values:manualSettings(), fetch:async () => { throw new Error('offline'); }});
+  await h.flush();
+  for (let i = 0; i < 5; i++) await h.second();
+  assert.equal(h.fetchCalls, 1);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /offline/);
+  assert.equal(h.document.querySelector('[data-gas-switch]')?.disabled, false);
+  assert.equal(h.countdown(), null);
+  assert.equal(h.document.querySelector('[data-gas-switch-gauge]').hidden, true);
+  const idle = async () => {
+    for (let i = 0; i < 6; i++) await h.second();
+    await h.tick();
+  };
+  await idle();
+  await h.deactivate();
+  await h.activate();
+  assert.equal(h.countdown(), null);
+  h.menus.get('GitHub Account Switcher: 설정')();
+  h.document.querySelector('[data-gas-cancel]').click();
+  await h.flush();
+  assert.equal(h.countdown(), null);
+  for (const route of ['/sample-team/repo/pull/42?tab=files#L10', '/sample-team/repo/issues']) {
+    await h.navigate(route);
+    assert.equal(h.countdown(), null);
+  }
+  await idle();
+  assert.equal(h.fetchCalls, 1);
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
+  assert.equal(h.fetchCalls, 2);
+  assert.equal(h.countdown(), null);
+  await idle();
+  assert.equal(h.fetchCalls, 2);
+});
+
+test('a page needing another account after a failed countdown counts down again', async t => {
+  const h = setup(t, {values:twoTargetSettings(), fetch:async () => { throw new Error('offline'); }});
+  await h.flush();
+  for (let i = 0; i < 5; i++) await h.second();
+  assert.equal(h.fetchCalls, 1);
+  await h.navigate('/another-team/repo');
+  assert.equal(h.countdown(), '5초');
+  await h.second();
+  await h.navigate('/sample-team/repo');
+  assert.equal(h.countdown(), '5초');
+  for (let i = 0; i < 4; i++) await h.second();
+  assert.equal(h.fetchCalls, 1);
+  await h.second();
+  assert.equal(h.fetchCalls, 2);
+});
+
+test('automatic switching never shows a countdown', async t => {
+  const h = setup(t); await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch-countdown]'), null);
+  assert.equal(h.switches.length, 1);
 });

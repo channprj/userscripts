@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.5.0
+// @version      0.6.0
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -37,12 +37,19 @@
   const SWITCH_PATH = '/switch_account';
   const SESSION_TIMEOUT = 8_000;
   const SWITCH_TIMEOUT = 15_000;
+  const COUNTDOWN_SECONDS = 5;
   let busy = false;
   let manualButton = null;
+  let manualLabel = null;
+  let manualCountdown = null;
+  let manualGauge = null;
   let manualButtonSnapshot = null;
   let manualControls = null;
   let observedManualContext = '';
   let dismissedManualContext = null;
+  let countdownContext = null;
+  let firedCountdownContext = null;
+  let countdownTimer = 0;
   let lastKey = '';
   let activation = 0;
   let wasActive;
@@ -148,6 +155,7 @@
       <p>한 줄에 <code>organization 또는 user = 전환할 username</code>을 입력하세요. URL 대신 이름만 입력합니다.</p>
       <p><code>/enterprises/</code> 아래 모든 경로에는 <code>enterprises/* = 전환할 username</code>을 사용하세요. SSO 등 인증 화면과 <code>/settings</code> 같은 GitHub 설정·시스템 페이지에서는 전환을 보류하며, 규칙에 없는 경로에서는 개인 계정을 사용합니다.</p>
       <label><input type="checkbox" name="enabled"> 자동 전환 사용</label>
+      <p>끄면 전환이 필요할 때 화면 상단에 버튼이 나타나고 ${COUNTDOWN_SECONDS}초 뒤 전환합니다. 버튼을 누르면 바로 전환하고, ×를 누르면 취소합니다.</p>
       <p>설정은 이 브라우저의 userscript 매니저 저장소에만 저장됩니다. 코드나 저장소 파일은 수정하지 않습니다.</p>
       <p role="alert" data-gas-error style="color:#cf222e"></p>
       <button type="submit">저장</button>
@@ -375,32 +383,88 @@
     throw new Error('계정을 전환하지 못했습니다. Account switcher에서 계정을 다시 추가하거나 다시 로그인해주세요.');
   }
 
+  function startManualSwitch() {
+    if (busy || !manualButtonSnapshot) return;
+    const snapshot = manualButtonSnapshot;
+    // One countdown per page: a failed switch leaves the button for an explicit retry.
+    firedCountdownContext = snapshot.context;
+    stopCountdown();
+    manualButton.disabled = true;
+    void check({ manual: snapshot });
+  }
+
+  function stopCountdown() {
+    clearTimeout(countdownTimer);
+    countdownContext = null;
+    if (!manualControls) return;
+    manualCountdown.hidden = true;
+    manualGauge.hidden = true;
+    manualButton.removeAttribute('title');
+  }
+
+  // The gauge shrinks in one CSS transition while the label counts whole seconds.
+  function startCountdown(context) {
+    stopCountdown();
+    countdownContext = context;
+    let remaining = COUNTDOWN_SECONDS;
+    manualButton.title = '누르면 바로 전환하고, ×를 누르면 취소합니다.';
+    manualGauge.hidden = false;
+    manualGauge.style.transition = 'none';
+    manualGauge.style.transform = 'scaleX(1)';
+    manualGauge.getBoundingClientRect();
+    manualGauge.style.transition = `transform ${COUNTDOWN_SECONDS * 1_000}ms linear`;
+    manualGauge.style.transform = 'scaleX(0)';
+    const step = () => {
+      if (remaining === 0) { startManualSwitch(); return; }
+      manualCountdown.hidden = false;
+      manualCountdown.textContent = `${remaining}초`;
+      remaining--;
+      countdownTimer = setTimeout(step, 1_000);
+    };
+    step();
+  }
+
+  function hideManualControls() {
+    stopCountdown();
+    manualControls?.remove();
+  }
+
   function refreshManualButton() {
     const config = settings();
     const url = new URL(location.href);
     const serialized = JSON.stringify(config);
-    const context = `${url.href}\n${serialized}`;
-    if (observedManualContext && observedManualContext !== context) dismissedManualContext = null;
-    observedManualContext = context;
     const target = config ? targetAccount(url, config) : '';
+    // Dismissal and the one-countdown rule follow the account to switch to, not the
+    // exact address, so anchors and other pages needing the same account keep them.
+    const context = `${target}\n${serialized}`;
+    if (observedManualContext && observedManualContext !== context) {
+      dismissedManualContext = null;
+      firedCountdownContext = null;
+    }
+    observedManualContext = context;
     const eligible = !!config && !isAutomatic(config, target) && active() && !editing && !pendingEdits()
       && !busy && !!login(document) && login(document) !== target
       && !isAuthentication(url.pathname) && !isSystem(url.pathname);
-    if (!eligible || dismissedManualContext === context) { manualControls?.remove(); return; }
+    if (!eligible || dismissedManualContext === context) { hideManualControls(); return; }
     if (!manualControls) {
       manualControls = document.createElement('div');
       manualControls.dataset.gasSwitchControls = '';
-      manualControls.style.cssText = 'position:fixed;top:max(16px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:2147483647;display:flex;align-items:stretch;width:max-content;max-width:calc(100vw - 32px);border:1px solid #57606a;border-radius:8px;background:Canvas;color:CanvasText;font:14px/1.4 system-ui;box-shadow:0 2px 8px #0003';
+      manualControls.style.cssText = 'position:fixed;top:max(16px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:2147483647;display:flex;align-items:stretch;width:max-content;max-width:calc(100vw - 32px);overflow:hidden;border:1px solid #57606a;border-radius:8px;background:Canvas;color:CanvasText;font:14px/1.4 system-ui;box-shadow:0 2px 8px #0003';
       manualButton = document.createElement('button');
       manualButton.type = 'button';
       manualButton.dataset.gasSwitch = '';
-      manualButton.style.cssText = 'min-width:0;max-width:100%;padding:8px 14px;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-      manualButton.addEventListener('click', () => {
-        if (busy || !manualButtonSnapshot) return;
-        const snapshot = manualButtonSnapshot;
-        manualButton.disabled = true;
-        void check({ manual: snapshot });
-      });
+      manualButton.style.cssText = 'display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;padding:8px 14px;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer';
+      manualButton.addEventListener('click', startManualSwitch);
+      // Only the label truncates, so a long username never hides the countdown.
+      manualLabel = document.createElement('span');
+      manualLabel.dataset.gasSwitchLabel = '';
+      manualLabel.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      manualCountdown = document.createElement('span');
+      manualCountdown.dataset.gasSwitchCountdown = '';
+      manualCountdown.setAttribute('aria-hidden', 'true');
+      manualCountdown.hidden = true;
+      manualCountdown.style.cssText = 'flex:none;font-variant-numeric:tabular-nums;opacity:.7';
+      manualButton.append(manualLabel, manualCountdown);
       const dismissButton = document.createElement('button');
       dismissButton.type = 'button';
       dismissButton.dataset.gasSwitchDismiss = '';
@@ -411,14 +475,20 @@
       dismissButton.addEventListener('click', () => {
         if (!manualControls?.isConnected) return;
         dismissedManualContext = observedManualContext;
-        manualControls.remove();
+        hideManualControls();
       });
-      manualControls.append(manualButton, dismissButton);
+      manualGauge = document.createElement('div');
+      manualGauge.dataset.gasSwitchGauge = '';
+      manualGauge.setAttribute('aria-hidden', 'true');
+      manualGauge.hidden = true;
+      manualGauge.style.cssText = 'position:absolute;left:0;bottom:0;width:100%;height:3px;background:#2f81f7;forced-color-adjust:none;transform-origin:left center;pointer-events:none';
+      manualControls.append(manualButton, dismissButton, manualGauge);
     }
     if (!manualControls.isConnected) document.body.append(manualControls);
-    manualButtonSnapshot = { url: url.href, serialized, target, activation };
+    manualButtonSnapshot = { url: url.href, serialized, target, activation, context };
     manualButton.disabled = false;
-    manualButton.textContent = `@${target} 계정으로 전환`;
+    manualLabel.textContent = `@${target} 계정으로 전환`;
+    if (countdownContext !== context && firedCountdownContext !== context) startCountdown(context);
   }
 
   async function check(options = {}) {
@@ -498,8 +568,8 @@
     refreshManualButton();
     lastKey = '';
     notice(config.enabled ? '자동 전환을 켰습니다.' : normalized(config.autoSwitchAccount)
-      ? `자동 전환을 껐습니다. 예외 계정 @${config.autoSwitchAccount.trim()}이 대상이면 계속 자동 전환합니다.`
-      : '자동 전환을 껐습니다.');
+      ? `자동 전환을 껐습니다. 예외 계정 @${config.autoSwitchAccount.trim()}이 대상이면 계속 자동 전환하고, 다른 계정은 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환합니다.`
+      : `자동 전환을 껐습니다. 전환이 필요하면 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환하며 ×로 취소할 수 있습니다.`);
     void check();
   });
 
