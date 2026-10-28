@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.6.3
+// @version      0.6.4
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -44,7 +44,12 @@
   const SWITCH_TIMEOUT = 15_000;
   const COUNTDOWN_SECONDS = 4;
   let busy = false;
+  // The page context whose countdown or button switch is in flight.
+  let switching = null;
+  let queuedSwitch = false;
+  let leaving = false;
   let manualButton = null;
+  let manualDismiss = null;
   let manualLabel = null;
   let manualCountdown = null;
   let manualGauge = null;
@@ -384,7 +389,15 @@
     if (pendingEdits() || editing) {
       notice(redirect ? '대상 계정의 SSO 인증이 필요합니다. 입력 중인 내용을 저장한 뒤 다시 시도해주세요.'
         : '계정을 전환했습니다. 입력 중인 내용을 저장한 뒤 페이지를 새로고침해주세요.');
-    } else if (redirect) location.assign(redirect);
+    } else navigate(redirect);
+  }
+
+  // The controls stay as they are until the page unloads; a navigation the browser
+  // blocks releases them after the switch time budget.
+  function navigate(redirect) {
+    leaving = true;
+    setTimeout(() => { leaving = false; refreshManualButton(); }, SWITCH_TIMEOUT);
+    if (redirect) location.assign(redirect);
     else location.reload();
   }
 
@@ -400,7 +413,7 @@
     try { previous = Number(sessionStorage.getItem(RELOAD_KEY)) || 0; } catch {}
     if (Date.now() - previous < RELOAD_GUARD) throw new Error('다른 탭의 계정 변경을 확인했습니다. 이 페이지를 새로고침해주세요.');
     try { sessionStorage.setItem(RELOAD_KEY, String(Date.now())); } catch {}
-    location.reload();
+    navigate();
   }
 
   async function switchAccount(target, accounts, valid) {
@@ -436,14 +449,19 @@
   }
 
   function startManualSwitch() {
-    if (busy || !manualButtonSnapshot) return;
+    if (switching || !manualButtonSnapshot) return;
+    // A server check already running finishes first, then this switch starts.
+    if (busy) { queuedSwitch = true; return; }
     const snapshot = manualButtonSnapshot;
     const state = countdownState;
     // One countdown per page: a failed switch leaves the button for an explicit retry.
     firedCountdownContext = snapshot.context;
+    switching = snapshot.context;
     stopCountdown();
-    manualButton.disabled = true;
-    void check({ manual: snapshot, state });
+    void check({ manual: snapshot, state }).finally(() => {
+      switching = null;
+      refreshManualButton();
+    });
   }
 
   function stopCountdown() {
@@ -491,11 +509,13 @@
   }
 
   function hideManualControls() {
+    queuedSwitch = false;
     stopCountdown();
     manualControls?.remove();
   }
 
   function refreshManualButton() {
+    if (leaving) return;
     const config = settings();
     const url = new URL(location.href);
     const serialized = JSON.stringify(config);
@@ -509,7 +529,7 @@
     }
     observedManualContext = context;
     const eligible = !!config && !isAutomatic(config, target) && active() && !editing && !pendingEdits()
-      && !busy && !!sessionLogin() && sessionLogin() !== target
+      && !!sessionLogin() && sessionLogin() !== target
       && !isAuthentication(url.pathname) && !isSystem(url.pathname);
     if (!eligible || dismissedManualContext === context) { hideManualControls(); return; }
     if (!manualControls) {
@@ -531,14 +551,14 @@
       manualCountdown.hidden = true;
       manualCountdown.style.cssText = 'flex:none;font-variant-numeric:tabular-nums;opacity:.7';
       manualButton.append(manualLabel, manualCountdown);
-      const dismissButton = document.createElement('button');
-      dismissButton.type = 'button';
-      dismissButton.dataset.gasSwitchDismiss = '';
-      dismissButton.setAttribute('aria-label', '계정 전환 버튼 닫기');
-      dismissButton.title = '계정 전환 버튼 닫기';
-      dismissButton.textContent = '×';
-      dismissButton.style.cssText = 'flex:0 0 40px;min-width:40px;padding:0;border:0;border-left:1px solid #57606a;background:transparent;color:inherit;font:20px/1 system-ui;cursor:pointer';
-      dismissButton.addEventListener('click', () => {
+      manualDismiss = document.createElement('button');
+      manualDismiss.type = 'button';
+      manualDismiss.dataset.gasSwitchDismiss = '';
+      manualDismiss.setAttribute('aria-label', '계정 전환 버튼 닫기');
+      manualDismiss.title = '계정 전환 버튼 닫기';
+      manualDismiss.textContent = '×';
+      manualDismiss.style.cssText = 'flex:0 0 40px;min-width:40px;padding:0;border:0;border-left:1px solid #57606a;background:transparent;color:inherit;font:20px/1 system-ui;cursor:pointer';
+      manualDismiss.addEventListener('click', () => {
         if (!manualControls?.isConnected) return;
         dismissedManualContext = observedManualContext;
         hideManualControls();
@@ -548,17 +568,24 @@
       manualGauge.setAttribute('aria-hidden', 'true');
       manualGauge.hidden = true;
       manualGauge.style.cssText = 'position:absolute;left:0;bottom:0;width:100%;height:3px;background:#2f81f7;forced-color-adjust:none;transform-origin:left center;pointer-events:none';
-      manualControls.append(manualButton, dismissButton, manualGauge);
+      manualControls.append(manualButton, manualDismiss, manualGauge);
     }
     if (!manualControls.isConnected) document.body.append(manualControls);
     manualButtonSnapshot = { url: url.href, serialized, target, activation, context };
-    manualButton.disabled = false;
-    manualLabel.textContent = `@${target} 계정으로 전환`;
+    // A switch in flight keeps the controls in place, so they never blink before the reload.
+    const inFlight = switching === context;
+    manualButton.disabled = inFlight;
+    manualButton.style.cursor = inFlight ? 'progress' : 'pointer';
+    manualDismiss.disabled = inFlight;
+    manualDismiss.style.cursor = inFlight ? 'default' : 'pointer';
+    manualDismiss.style.opacity = inFlight ? '.4' : '';
+    manualLabel.textContent = inFlight ? `@${target} 계정으로 전환 중…` : `@${target} 계정으로 전환`;
     if (countdownContext !== context && firedCountdownContext !== context) startCountdown(context);
   }
 
   async function check(options = {}) {
     const manual = options.manual ?? null;
+    if (leaving) return;
     if (!manual) refreshManualButton();
     if (!active() || busy || editing || pendingEdits()) { refreshManualButton(); return; }
     const config = settings();
@@ -627,6 +654,10 @@
       clearTimeout(timeout);
       busy = false;
       refreshManualButton();
+      if (queuedSwitch) {
+        queuedSwitch = false;
+        if (manualControls?.isConnected) startManualSwitch();
+      }
     }
   }
 

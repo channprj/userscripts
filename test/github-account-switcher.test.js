@@ -1014,7 +1014,7 @@ for (const mutation of ['route', 'settings', 'edit', 'activation']) {
     const button = h.document.querySelector('[data-gas-switch]');
     button.click();
     assert.equal(button.disabled, true);
-    assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+    assert.equal(h.document.querySelector('[data-gas-switch]'), button);
     if (mutation === 'route') await h.navigate('/another-owner/repo');
     if (mutation === 'settings') h.values.set('settings', {...config,personal:'other-personal',enabled:false});
     if (mutation === 'edit') {
@@ -1604,4 +1604,69 @@ test('a stale banner never reloads a page with a draft', async t => {
   await h.banner();
   assert.equal(h.fetchCalls, 0);
   assert.equal(h.reloaded, false);
+});
+
+test('the controls stay steady from the countdown end until the page reloads', async t => {
+  let respond;
+  const h = setup(t, {values:manualSettings(), navigations:1, switchResponse:() => new Promise(resolve => { respond = resolve; })});
+  await h.flush();
+  const controls = h.document.querySelector('[data-gas-switch-controls]');
+  const removals = [];
+  new h.window.MutationObserver(records => {
+    for (const record of records) for (const node of record.removedNodes) if (node === controls) removals.push(node);
+  }).observe(h.document.body, {childList:true});
+  await advance(h, COUNTDOWN);
+  assert.equal(h.requests.length, 1);
+  const button = h.document.querySelector('[data-gas-switch]');
+  const dismiss = h.document.querySelector('[data-gas-switch-dismiss]');
+  assert.equal(button.querySelector('[data-gas-switch-label]').textContent, '@sample-work 계정으로 전환 중…');
+  assert.deepEqual([button.disabled, dismiss.disabled], [true, true]);
+  assert.equal(h.countdown(), null);
+  await h.tick();
+  respond(json(200, {success:true}, 'https://github.com/switch_account'));
+  await h.flush();
+  await h.tick();
+  assert.equal(h.navigations.length, 1);
+  assert.equal(controls.isConnected, true);
+  assert.equal(button.querySelector('[data-gas-switch-label]').textContent, '@sample-work 계정으로 전환 중…');
+  assert.equal(button.disabled, true);
+  assert.deepEqual(removals, []);
+});
+
+test('the dismiss button cannot hide a switch already in flight', async t => {
+  let respond;
+  const h = setup(t, {values:manualSettings(), switchResponse:() => new Promise(resolve => { respond = resolve; })});
+  await h.flush();
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
+  h.document.querySelector('[data-gas-switch-dismiss]').click();
+  assert.ok(h.document.querySelector('[data-gas-switch-controls]'));
+  respond(json(422, {error:'Session expired'}, 'https://github.com/switch_account'));
+  await h.flush();
+  const button = h.document.querySelector('[data-gas-switch]');
+  assert.equal(button.disabled, false);
+  assert.equal(button.querySelector('[data-gas-switch-label]').textContent, '@sample-work 계정으로 전환');
+});
+
+test('a countdown ending during a server check switches once the check finishes', async t => {
+  let calls = 0;
+  let release;
+  const h = setup(t, {values:manualSettings(), fetch:() => {
+    const body = '<meta name="user-login" content="sample-personal">';
+    const response = {ok:true, url:'https://github.com/', text:async () => body};
+    return ++calls === 2 ? new Promise(resolve => { release = () => resolve(response); }) : response;
+  }});
+  await h.flush();
+  // GitHub flags the page; the server confirms the page's own account.
+  await h.banner();
+  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.countdown(), '4초');
+  // Another page needing the same account keeps the countdown while it is checked.
+  await h.navigate('/sample-team/other');
+  assert.equal(calls, 2);
+  await advance(h, COUNTDOWN);
+  assert.deepEqual(h.requests, []);
+  release();
+  await h.flush();
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
 });
