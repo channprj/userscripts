@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.6.4
+// @version      0.6.5
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
-// @run-at       document-idle
+// @run-at       document-start
 // @noframes
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -478,7 +478,10 @@
   function startCountdown(context) {
     stopCountdown();
     countdownContext = context;
-    let remaining = COUNTDOWN_SECONDS;
+    // Steps aim at whole seconds before one deadline, so a busy page delays a label
+    // but never the switch, which ends together with the gauge.
+    const deadline = performance.now() + COUNTDOWN_SECONDS * 1_000;
+    let shown = 0;
     manualButton.title = '누르면 바로 전환하고, ×를 누르면 취소합니다.';
     manualGauge.hidden = false;
     manualGauge.style.transition = 'none';
@@ -487,14 +490,17 @@
     manualGauge.style.transition = `transform ${COUNTDOWN_SECONDS * 1_000}ms linear`;
     manualGauge.style.transform = 'scaleX(0)';
     const step = () => {
-      if (remaining === 0) { startManualSwitch(); return; }
-      // Ask the server during the last second, so the switch request can leave the
-      // moment the countdown ends with an answer at most a second old.
-      if (remaining === 1) prefetchState();
-      manualCountdown.hidden = false;
-      manualCountdown.textContent = `${remaining}초`;
-      remaining--;
-      countdownTimer = setTimeout(step, 1_000);
+      const remaining = Math.ceil((deadline - performance.now()) / 1_000);
+      if (remaining <= 0) { startManualSwitch(); return; }
+      if (remaining !== shown) {
+        shown = remaining;
+        // Ask the server during the last second, so the switch request can leave the
+        // moment the countdown ends with an answer at most a second old.
+        if (remaining === 1) prefetchState();
+        manualCountdown.hidden = false;
+        manualCountdown.textContent = `${remaining}초`;
+      }
+      countdownTimer = setTimeout(step, Math.max(0, deadline - (remaining - 1) * 1_000 - performance.now()));
     };
     step();
   }
@@ -661,56 +667,70 @@
     }
   }
 
-  GM_registerMenuCommand(`${NAME}: 설정`, openSettings);
-  GM_registerMenuCommand(`${NAME}: 다시 시도`, () => {
-    GM_deleteValue('attempt');
-    try { sessionStorage.removeItem(RELOAD_KEY); } catch {}
-    if (pendingEdits()) {
-      notice('입력 중인 내용을 보호하기 위해 전환을 보류했습니다. 내용을 저장한 뒤 페이지를 새로고침해주세요.');
-      return;
-    }
-    lastKey = '';
-    void check();
-  });
-  GM_registerMenuCommand(`${NAME}: 자동 전환 켜기/끄기`, () => {
-    const config = settings();
-    if (!config) { openSettings(); return; }
-    config.enabled = config.enabled === false;
-    GM_setValue('settings', config);
-    refreshManualButton();
-    lastKey = '';
-    notice(config.enabled ? '자동 전환을 켰습니다.' : normalized(config.autoSwitchAccount)
-      ? `자동 전환을 껐습니다. 예외 계정 @${config.autoSwitchAccount.trim()}이 대상이면 계속 자동 전환하고, 다른 계정은 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환합니다.`
-      : `자동 전환을 껐습니다. 전환이 필요하면 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환하며 ×로 취소할 수 있습니다.`);
-    void check();
-  });
-
-  // Avoid reloading a tab with an unfinished comment or edited form.
-  const markEdited = event => {
-    const control = event.target.closest('input, textarea, select, [contenteditable="true"]');
-    if (control && !control.closest('[data-gas-settings]') && !control.matches('input[type="search"]')) {
-      editedControls.add(control);
+  function start() {
+    GM_registerMenuCommand(`${NAME}: 설정`, openSettings);
+    GM_registerMenuCommand(`${NAME}: 다시 시도`, () => {
+      GM_deleteValue('attempt');
+      try { sessionStorage.removeItem(RELOAD_KEY); } catch {}
+      if (pendingEdits()) {
+        notice('입력 중인 내용을 보호하기 위해 전환을 보류했습니다. 내용을 저장한 뒤 페이지를 새로고침해주세요.');
+        return;
+      }
       lastKey = '';
+      void check();
+    });
+    GM_registerMenuCommand(`${NAME}: 자동 전환 켜기/끄기`, () => {
+      const config = settings();
+      if (!config) { openSettings(); return; }
+      config.enabled = config.enabled === false;
+      GM_setValue('settings', config);
       refreshManualButton();
-    }
-  };
-  document.addEventListener('input', markEdited, true);
-  document.addEventListener('change', markEdited, true);
-  const activate = () => {
-    const nowActive = active();
-    if (nowActive && !wasActive) activation++;
-    wasActive = nowActive;
-    void check();
-  };
-  window.addEventListener('focus', activate);
-  window.addEventListener('blur', activate);
-  window.navigation?.addEventListener('currententrychange', () => { void check(); });
-  document.addEventListener('visibilitychange', activate);
-  for (const name of ['turbo:load', 'pjax:end']) document.addEventListener(name, () => { void check(); });
-  window.addEventListener('popstate', () => { void check(); });
-  // Detect pushState in both Tampermonkey's isolated world and GitHub's React router.
-  setInterval(() => { void check(); }, 750);
+      lastKey = '';
+      notice(config.enabled ? '자동 전환을 켰습니다.' : normalized(config.autoSwitchAccount)
+        ? `자동 전환을 껐습니다. 예외 계정 @${config.autoSwitchAccount.trim()}이 대상이면 계속 자동 전환하고, 다른 계정은 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환합니다.`
+        : `자동 전환을 껐습니다. 전환이 필요하면 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환하며 ×로 취소할 수 있습니다.`);
+      void check();
+    });
 
-  if (!settings()) notice('설정에서 개인 계정과 전환 규칙을 입력해주세요.');
-  void check();
+    // Avoid reloading a tab with an unfinished comment or edited form.
+    const markEdited = event => {
+      const control = event.target.closest('input, textarea, select, [contenteditable="true"]');
+      if (control && !control.closest('[data-gas-settings]') && !control.matches('input[type="search"]')) {
+        editedControls.add(control);
+        lastKey = '';
+        refreshManualButton();
+      }
+    };
+    document.addEventListener('input', markEdited, true);
+    document.addEventListener('change', markEdited, true);
+    const activate = () => {
+      const nowActive = active();
+      if (nowActive && !wasActive) activation++;
+      wasActive = nowActive;
+      void check();
+    };
+    window.addEventListener('focus', activate);
+    window.addEventListener('blur', activate);
+    window.navigation?.addEventListener('currententrychange', () => { void check(); });
+    document.addEventListener('visibilitychange', activate);
+    for (const name of ['turbo:load', 'pjax:end']) document.addEventListener(name, () => { void check(); });
+    window.addEventListener('popstate', () => { void check(); });
+    // Detect pushState in both Tampermonkey's isolated world and GitHub's React router.
+    setInterval(() => { void check(); }, 750);
+
+    if (!settings()) notice('설정에서 개인 계정과 전환 규칙을 입력해주세요.');
+    void check();
+  }
+
+  // At document-start nothing is parsed yet. GitHub's head, which names the signed-in
+  // account, is complete once the body begins, well before DOMContentLoaded.
+  if (document.body) start();
+  else {
+    const observer = new MutationObserver(() => {
+      if (!document.body) return;
+      observer.disconnect();
+      start();
+    });
+    observer.observe(document, { childList: true, subtree: true });
+  }
 })();

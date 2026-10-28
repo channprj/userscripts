@@ -76,11 +76,14 @@ function setup(t, options = {}) {
   window.setInterval = fn => { intervals.push(fn); return intervals.length; };
   const timeout = window.setTimeout.bind(window);
   const clear = window.clearTimeout.bind(window);
-  // Whole-second countdown steps run only when a test advances them.
+  // Countdown steps (at most a second) and the clock they read advance only when a
+  // test advances them; longer time budgets elapse almost at once.
   const seconds = new Map();
   let nextSecond = 0;
+  let clock = 0;
+  Object.defineProperty(window.performance, 'now', { configurable:true, value:() => clock });
   window.setTimeout = (fn, ms) => {
-    if (ms !== 1_000) return timeout(fn, Math.min(ms, 20));
+    if (ms > 1_000) return timeout(fn, Math.min(ms, 20));
     seconds.set(--nextSecond, fn);
     return nextSecond;
   };
@@ -178,6 +181,9 @@ function setup(t, options = {}) {
       navigation.dispatchEvent(new window.Event('currententrychange'));
     };
   }
+  // At document-start the script runs before the body is parsed.
+  const parkedBody = options.beforeBody ? document.body : null;
+  parkedBody?.remove();
   window.eval(source);
   if (options.draft) document.querySelector('textarea').dispatchEvent(new window.Event('input', {bubbles:true}));
   const flush = async () => {
@@ -188,7 +194,9 @@ function setup(t, options = {}) {
     get fetchCalls() { return fetchCalls; }, get panelCalls() { return panelCalls; }, get rootCalls() { return rootCalls; },
     async tick() { for (const fn of intervals) fn(); await flush(); },
     async settle() { await new Promise(resolve => setTimeout(resolve, 35)); await flush(); },
-    async second() {
+    async second() { await this.elapse(1_000); },
+    async elapse(ms) {
+      clock += ms;
       const due = [...seconds.values()];
       seconds.clear();
       for (const fn of due) fn();
@@ -206,6 +214,7 @@ function setup(t, options = {}) {
       const label = document.querySelector('[data-gas-switch-countdown]');
       return label && !label.hidden ? label.textContent : null;
     },
+    async parseBody() { document.documentElement.append(parkedBody); await flush(); },
     async navigate(route) { window.history.pushState({}, '', route); await this.tick(); },
     async navigateWithoutTick(route) { window.history.pushState({}, '', route); await flush(); },
     async activate() {
@@ -1668,5 +1677,49 @@ test('a countdown ending during a server check switches once the check finishes'
   assert.deepEqual(h.requests, []);
   release();
   await h.flush();
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+});
+
+test('starts once the body begins instead of waiting for the page to load', async t => {
+  const h = setup(t, {beforeBody:true});
+  await h.flush();
+  assert.deepEqual([h.fetchCalls, h.panelCalls, h.menus.size], [0, 0, 0]);
+  await h.parseBody();
+  assert.equal(h.menus.size, 3);
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+});
+
+test('the countdown button appears once the body begins', async t => {
+  const h = setup(t, {values:manualSettings(), beforeBody:true});
+  await h.flush();
+  assert.equal(h.document.querySelector('[data-gas-switch]'), null);
+  await h.parseBody();
+  assert.equal(h.document.querySelector('[data-gas-switch-label]')?.textContent, '@sample-work 계정으로 전환');
+  assert.equal(h.countdown(), '4초');
+});
+
+test('a late countdown step never moves the switch past the four-second deadline', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.elapse(1_500);
+  assert.equal(h.countdown(), '3초');
+  await h.elapse(500);
+  assert.equal(h.countdown(), '2초');
+  await h.elapse(1_000);
+  assert.equal(h.countdown(), '1초');
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 1]);
+  await h.elapse(999);
+  assert.deepEqual(h.requests, []);
+  await h.elapse(1);
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+});
+
+test('a countdown step that falls behind skips to the remaining seconds', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.elapse(2_500);
+  assert.equal(h.countdown(), '2초');
+  assert.deepEqual(h.requests, []);
+  await h.elapse(1_500);
   assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
 });
