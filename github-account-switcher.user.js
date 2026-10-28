@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.6.1
+// @version      0.6.2
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -35,6 +35,8 @@
   // posts the selected one to SWITCH_PATH, so no menu needs to be opened.
   const ACCOUNTS_PATH = '/_side-panels/user.json';
   const SWITCH_PATH = '/switch_account';
+  // GitHub's header loads the signed-in account from this small JSON payload.
+  const PAYLOADS_PATH = '/_global-navigation/payloads.json';
   const SESSION_TIMEOUT = 8_000;
   const SWITCH_TIMEOUT = 15_000;
   const COUNTDOWN_SECONDS = 4;
@@ -50,6 +52,7 @@
   let countdownContext = null;
   let firedCountdownContext = null;
   let countdownTimer = 0;
+  let countdownState = null;
   let lastKey = '';
   let activation = 0;
   let wasActive;
@@ -306,11 +309,9 @@
     }
   }
 
-  // Mirror the headers of GitHub's verifiedFetch. The fresh session document
-  // carries the newest nonce; the current page is the fallback.
-  function verifiedHeaders(doc) {
-    const meta = name => doc.querySelector(`meta[name="${name}"]`)?.content
-      || document.querySelector(`meta[name="${name}"]`)?.content;
+  // Mirror the headers of GitHub's verifiedFetch.
+  function verifiedHeaders() {
+    const meta = name => document.querySelector(`meta[name="${name}"]`)?.content;
     const headers = { Accept: 'application/json', 'GitHub-Verified-Fetch': 'true', 'X-Requested-With': 'XMLHttpRequest' };
     if (meta('fetch-nonce')) headers['X-Fetch-Nonce'] = meta('fetch-nonce');
     if (meta('release')) headers['X-GitHub-Client-Version'] = meta('release');
@@ -329,14 +330,34 @@
     return new DOMParser().parseFromString(await response.text(), 'text/html');
   }
 
-  // Returns null when GitHub no longer exposes stashed accounts in this shape.
-  async function stashedAccounts(headers, signal) {
-    const response = await fetch(ACCOUNTS_PATH, { credentials: 'same-origin', cache: 'no-store', headers, signal });
+  // Returns null when the endpoint is gone or no longer answers with JSON.
+  async function fetchJson(path, signal) {
+    const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', headers: verifiedHeaders(), signal });
     if (!response.ok || new URL(response.url).origin !== location.origin) return null;
-    const data = await response.json().catch(error => { if (error.name === 'AbortError') throw error; return null; });
-    const accounts = data?.stashedAccounts;
+    return response.json().catch(error => { if (error.name === 'AbortError') throw error; return null; });
+  }
+
+  // GitHub's navigation payload names the signed-in account at a fraction of the
+  // cost of a full page; the dashboard document remains the fallback.
+  async function currentLogin(signal) {
+    const owner = (await fetchJson(PAYLOADS_PATH, signal))?.user_menu?.owner;
+    if (typeof owner?.login === 'string' && owner.login) return normalized(owner.login);
+    return login(await sessionDocument(signal));
+  }
+
+  // Returns null when GitHub no longer exposes stashed accounts in this shape.
+  async function stashedAccounts(signal) {
+    const accounts = (await fetchJson(ACCOUNTS_PATH, signal))?.stashedAccounts;
     return Array.isArray(accounts) && accounts.every(account => typeof account?.login === 'string'
       && ['string', 'number'].includes(typeof account.userSessionId)) ? accounts : null;
+  }
+
+  // The signed-in account and, when a switch is expected, the stashed sessions are
+  // requested together, but callers wait for the sessions only right before switching.
+  function serverState(withAccounts, signal) {
+    const accounts = withAccounts ? stashedAccounts(signal) : undefined;
+    accounts?.catch(() => {});
+    return { login: currentLogin(signal), accounts };
   }
 
   // Reload like GitHub, or follow its SSO redirect, unless unsaved input would be lost.
@@ -348,10 +369,7 @@
     else location.reload();
   }
 
-  async function switchAccount(target, doc, valid, signal) {
-    const headers = verifiedHeaders(doc);
-    const accounts = await stashedAccounts(headers, signal);
-    if (!valid()) return;
+  async function switchAccount(target, accounts, valid) {
     if (!accounts) { await switchWithMenu(target, valid); return; }
     const account = accounts.find(account => normalized(account.login) === target);
     if (!account || String(account.userSessionId) === '') {
@@ -364,7 +382,7 @@
     GM_setValue('attempt', { target, at: Date.now() });
     // The POST has its own time budget: aborting it cannot undo a switch the server already made.
     const result = await withTimeout(SWITCH_TIMEOUT, async postSignal => {
-      const response = await fetch(SWITCH_PATH, { method: 'POST', credentials: 'same-origin', headers, body, signal: postSignal });
+      const response = await fetch(SWITCH_PATH, { method: 'POST', credentials: 'same-origin', headers: verifiedHeaders(), body, signal: postSignal });
       return { ok: response.ok, data: await response.json() };
     }).catch(() => null);
     if (result?.ok && result.data?.success) { leavePage(); return; }
@@ -379,23 +397,25 @@
       throw new Error(`계정을 전환하지 못했습니다: ${result.data.error.trim()}`);
     }
     // Without a clear answer the switch may still have happened, so trust the server session.
-    if (login(await withTimeout(SESSION_TIMEOUT, sessionDocument)) === target) { leavePage(); return; }
+    if (await withTimeout(SESSION_TIMEOUT, currentLogin) === target) { leavePage(); return; }
     throw new Error('계정을 전환하지 못했습니다. Account switcher에서 계정을 다시 추가하거나 다시 로그인해주세요.');
   }
 
   function startManualSwitch() {
     if (busy || !manualButtonSnapshot) return;
     const snapshot = manualButtonSnapshot;
+    const state = countdownState;
     // One countdown per page: a failed switch leaves the button for an explicit retry.
     firedCountdownContext = snapshot.context;
     stopCountdown();
     manualButton.disabled = true;
-    void check({ manual: snapshot });
+    void check({ manual: snapshot, state });
   }
 
   function stopCountdown() {
     clearTimeout(countdownTimer);
     countdownContext = null;
+    countdownState = null;
     if (!manualControls) return;
     manualCountdown.hidden = true;
     manualGauge.hidden = true;
@@ -416,12 +436,24 @@
     manualGauge.style.transform = 'scaleX(0)';
     const step = () => {
       if (remaining === 0) { startManualSwitch(); return; }
+      // Ask the server during the last second, so the switch request can leave the
+      // moment the countdown ends with an answer at most a second old.
+      if (remaining === 1) prefetchState();
       manualCountdown.hidden = false;
       manualCountdown.textContent = `${remaining}초`;
       remaining--;
       countdownTimer = setTimeout(step, 1_000);
     };
     step();
+  }
+
+  function prefetchState() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT);
+    const state = serverState(true, controller.signal);
+    // Failures surface only if the state is used; check() then asks again.
+    void Promise.allSettled([state.login, state.accounts]).then(() => clearTimeout(timeout));
+    countdownState = state;
   }
 
   function hideManualControls() {
@@ -518,10 +550,16 @@
     const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT);
     try {
       const switchTarget = manual?.target ?? target;
-      // A background tab's meta tag may describe the previous shared session.
-      // Check the server before using any menu cached in that tab.
-      const doc = await sessionDocument(controller.signal);
-      const current = login(doc);
+      // A background tab's meta tag may describe the previous shared session, so ask
+      // the server. A countdown's last second has usually asked already; if that
+      // failed, ask once more, since the network may be back by now.
+      const prefetched = manual ? options.state : null;
+      let state = prefetched ?? serverState(login(document) !== switchTarget, controller.signal);
+      const current = await state.login.catch(error => {
+        if (state !== prefetched) throw error;
+        state = serverState(true, controller.signal);
+        return state.login;
+      });
       if (!valid()) return;
       if (!current) throw new Error('GitHub 로그인이 필요합니다. 계정들을 먼저 로그인해주세요.');
       if (current !== login(document)) {
@@ -539,7 +577,12 @@
       if (previous && Date.now() - previous.at < (previous.target === switchTarget ? SWITCH_COOLDOWN : 2_000)) {
         throw new Error('반복 전환을 멈췄습니다. 계정 상태를 확인한 뒤 매니저 메뉴에서 다시 시도를 눌러주세요.');
       }
-      await switchAccount(switchTarget, doc, valid, controller.signal);
+      const accounts = await state.accounts?.catch(error => {
+        if (state !== prefetched) throw error;
+        return stashedAccounts(controller.signal);
+      });
+      if (!valid()) return;
+      await switchAccount(switchTarget, accounts, valid);
     } catch (error) {
       if (valid()) notice(error.name === 'AbortError' ? '계정 확인 시간이 초과되었습니다. 매니저 메뉴에서 다시 시도를 눌러주세요.' : error.message);
     } finally {

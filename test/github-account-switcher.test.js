@@ -53,8 +53,10 @@ function setup(t, options = {}) {
   const accounts = options.accounts ?? ['sample-personal', 'sample-work', 'sample-work-extra'];
   const sessionIds = Object.fromEntries(accounts.map((account, index) => [account, 1000 + index]));
   const sessionLogin = options.session ?? options.current ?? 'sample-personal';
+  // fetchCalls counts server checks of the signed-in account (payload or dashboard).
   let fetchCalls = 0;
   let panelCalls = 0;
+  let rootCalls = 0;
   let focused = options.focused ?? true;
   let visible = options.visible ?? true;
   Object.defineProperty(document, 'visibilityState', { get: () => visible ? 'visible' : 'hidden' });
@@ -81,6 +83,16 @@ function setup(t, options = {}) {
   }));
   window.fetch = async (input, init = {}) => {
     const url = new URL(String(input), window.location.href);
+    if (url.pathname === '/_global-navigation/payloads.json') {
+      if (options.payloads === 'missing') return json(404, {}, url.href);
+      if (options.payloads === 'renamed') return json(200, { userMenu: { owner: { login: sessionLogin } } }, url.href);
+      if (options.payloads === 'html') return { ok: true, status: 200, url: url.href, json: async () => { throw new SyntaxError('Unexpected token <'); } };
+      fetchCalls++;
+      // The payload reports the same signed-in account as the dashboard session.
+      const session = await sessionFetch(input, init);
+      const login = /name="user-login" content="([^"]*)"/.exec(await session.text())?.[1] ?? '';
+      return json(session.ok ? 200 : 500, { user_menu: login ? { owner: { login, name: 'Display Name', avatarUrl: '' } } : null }, url.href);
+    }
     if (url.pathname === '/_side-panels/user.json') {
       panelCalls++;
       if (options.sidePanel === 'missing') return json(404, {}, url.href);
@@ -105,6 +117,7 @@ function setup(t, options = {}) {
       return json(200, { success: true }, url.href);
     }
     fetchCalls++;
+    rootCalls++;
     return sessionFetch(input, init);
   };
   const userButton = document.querySelector('header button');
@@ -164,7 +177,7 @@ function setup(t, options = {}) {
   };
   return {
     window, document, values, menus, switches, attemptsAtSwitch, requests, menuClicks, writes, errors, navigations, flush,
-    get fetchCalls() { return fetchCalls; }, get panelCalls() { return panelCalls; },
+    get fetchCalls() { return fetchCalls; }, get panelCalls() { return panelCalls; }, get rootCalls() { return rootCalls; },
     async tick() { for (const fn of intervals) fn(); await flush(); },
     async settle() { await new Promise(resolve => setTimeout(resolve, 35)); await flush(); },
     async second() {
@@ -216,14 +229,72 @@ test('switches with GitHub\'s stashed session request without opening any menu',
   assert.equal(h.panelCalls, 1);
   assert.deepEqual(h.requests, [{method:'POST', body:{user_session_id:'1001', from:'nav_panel'}, headers:{
     Accept:'application/json', 'GitHub-Verified-Fetch':'true', 'X-Requested-With':'XMLHttpRequest',
-    'X-Fetch-Nonce':'v2:session-nonce', 'X-GitHub-Client-Version':'fixture-release',
+    'X-Fetch-Nonce':'v2:page-nonce', 'X-GitHub-Client-Version':'fixture-release',
   }}]);
 });
 
-test('uses the page nonce when the verified session document has none', async t => {
-  const h = setup(t, {fetch:async () => ({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'})});
+test('a switch asks for the signed-in account and stashed sessions together without loading the dashboard', async t => {
+  let release;
+  const h = setup(t, {fetch:() => new Promise(resolve => { release = resolve; })});
   await h.flush();
-  assert.equal(h.requests[0]?.headers['X-Fetch-Nonce'], 'v2:page-nonce');
+  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.panelCalls, 1);
+  assert.deepEqual(h.requests, []);
+  release({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'});
+  await h.flush();
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+  assert.equal(h.rootCalls, 0);
+});
+
+test('a page already on the target only asks for the signed-in account', async t => {
+  const h = setup(t, {current:'sample-work'});
+  await h.flush();
+  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.panelCalls, 0);
+  assert.equal(h.rootCalls, 0);
+  assert.deepEqual(h.requests, []);
+});
+
+for (const payloads of ['missing', 'renamed', 'html']) {
+  test(`the dashboard page confirms the account when the navigation payload is ${payloads}`, async t => {
+    const h = setup(t, {payloads});
+    await h.flush();
+    assert.equal(h.rootCalls, 1);
+    assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+  });
+}
+
+test('the signed-in account is requested while stashed sessions are still loading', async t => {
+  let release;
+  const h = setup(t, {sidePanel:response => new Promise(resolve => { release = () => resolve(response); })});
+  await h.flush();
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 1]);
+  assert.deepEqual(h.requests, []);
+  release();
+  await h.flush();
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+});
+
+test('a stale page reloads even when the account list fails', async t => {
+  const h = setup(t, {session:'sample-other', sidePanel:() => Promise.reject(new TypeError('Failed to fetch'))});
+  await h.flush();
+  assert.equal(h.values.has('refresh'), true);
+  assert.equal(h.document.querySelector('[data-gas-notice]'), null);
+  assert.deepEqual(h.requests, []);
+});
+
+test('a signed-out session is reported without waiting for the account list', async t => {
+  const h = setup(t, {session:'', sidePanel:() => new Promise(() => {})});
+  await h.flush();
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /로그인/);
+  assert.deepEqual(h.requests, []);
+});
+
+test('a login with capitals from the navigation payload matches the page login', async t => {
+  const h = setup(t, {current:'Sample-Personal'});
+  await h.flush();
+  assert.equal(h.values.has('refresh'), false);
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
 });
 
 for (const sidePanel of ['missing', 'malformed', 'renamed']) {
@@ -280,6 +351,7 @@ for (const failure of ['network', 'non-JSON']) {
     await h.flush();
     assert.equal(h.switches.length, 1);
     assert.equal(h.fetchCalls, 2);
+    assert.equal(h.rootCalls, 0);
     assert.equal(h.document.querySelector('[data-gas-notice]'), null);
   });
 }
@@ -543,7 +615,7 @@ test('failed session verification never starts a switch', async t => {
   const h = setup(t, {fetch:async () => {throw new Error('offline');}}); await h.flush();
   assert.equal(h.switches.length, 0);
   assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
-  assert.equal(h.panelCalls, 0);
+  assert.deepEqual(h.requests, []);
 });
 
 test('menu fallback closes only a menu opened by the script for an expired target', async t => {
@@ -704,7 +776,7 @@ for (const exception of ['sample-work-extra', 'other-work', undefined, '']) {
     const h = setup(t, {values:new Map([['settings',stored]])}); await h.flush();
     assert.equal(h.switches.length, 0);
     assert.ok(h.document.querySelector('[data-gas-switch]'));
-    assert.equal(h.fetchCalls, 0);
+    assert.deepEqual(h.requests, []);
   });
 }
 
@@ -754,7 +826,7 @@ test('SPA navigation updates exception mode between manual and automatic switchi
   const h = setup(t, {route:'/another-owner/repo', current:'another-work', values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:'sample-work'}]])});
   await h.flush();
   assert.ok(h.document.querySelector('[data-gas-switch]'));
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.requests, []);
   await h.navigate('/sample-team/repo');
   assert.equal(h.document.querySelector('[data-gas-switch]'), null);
   assert.equal(h.switches[0]?.account, 'sample-work');
@@ -779,19 +851,20 @@ test('deleting settings removes stored mappings and stops switching', async t =>
 });
 
 
-test('disabled automatic switching offers a manual button without background checks', async t => {
+test('disabled automatic switching offers a button without background checks before its last second', async t => {
   const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
   await h.flush();
   const button = h.document.querySelector('[data-gas-switch]');
   assert.ok(button);
   assert.equal(button.querySelector('[data-gas-switch-label]').textContent, '@sample-work 계정으로 전환');
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [0, 0]);
   await h.tick();
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [0, 0]);
   assert.equal(h.document.querySelectorAll('[data-gas-switch]').length, 1);
   button.click();
   await h.flush();
   assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 1]);
   assert.equal(h.values.get('settings').enabled, false);
 });
 
@@ -809,10 +882,11 @@ test('a retained manual button cannot retarget after SPA navigation', async t =>
   await h.flush();
   const oldButton = h.document.querySelector('[data-gas-switch]');
   await h.navigate('/another-owner/repo');
+  const fetchCalls = h.fetchCalls;
   oldButton.click();
   await h.flush();
   assert.deepEqual(h.switches, []);
-  assert.equal(h.fetchCalls, 0);
+  assert.equal(h.fetchCalls, fetchCalls);
 });
 
 test('a retained manual button cannot run after its exception setting changes', async t => {
@@ -820,9 +894,10 @@ test('a retained manual button cannot run after its exception setting changes', 
   await h.flush();
   const button = h.document.querySelector('[data-gas-switch]');
   h.values.set('settings', {...config,enabled:false,autoSwitchAccount:'sample-work'});
+  const fetchCalls = h.fetchCalls;
   button.click();
   await h.flush();
-  assert.equal(h.fetchCalls, 0);
+  assert.equal(h.fetchCalls, fetchCalls);
   assert.equal(h.switches.length, 0);
 });
 
@@ -1063,7 +1138,7 @@ test('the manual button switches after a four-second countdown with a shrinking 
   for (const remaining of remainingLabels) {
     await h.second();
     assert.equal(h.countdown(), remaining);
-    assert.equal(h.fetchCalls, 0);
+    assert.deepEqual(h.requests, []);
   }
   await h.tick();
   assert.equal(h.countdown(), '1초');
@@ -1092,7 +1167,7 @@ test('dismissing cancels the countdown without switching', async t => {
   h.document.querySelector('[data-gas-switch-dismiss]').click();
   await advance(h, COUNTDOWN + 1);
   await h.tick();
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.requests, []);
   assert.equal(h.switches.length, 0);
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
 });
@@ -1106,7 +1181,7 @@ test('the countdown stops while the tab is inactive and restarts from a full gau
   await h.deactivate();
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
   await advance(h, COUNTDOWN + 1);
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.requests, []);
   const atReflow = [];
   gauge.getBoundingClientRect = () => { atReflow.push([gauge.style.transition, gauge.style.transform, gauge.hidden]); return {}; };
   await h.activate();
@@ -1130,7 +1205,7 @@ test('a draft stops the countdown until the draft is gone', async t => {
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
   await advance(h, COUNTDOWN + 1);
   await h.tick();
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.requests, []);
   control.remove();
   await h.tick();
   assert.equal(h.countdown(), '4초');
@@ -1146,7 +1221,7 @@ test('open settings stop the countdown and closing them restarts it from the beg
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
   await advance(h, COUNTDOWN + 1);
   await h.tick();
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.requests, []);
   h.document.querySelector('[data-gas-cancel]').click();
   await h.flush();
   assert.equal(h.countdown(), '4초');
@@ -1165,7 +1240,7 @@ test('a page needing another account restarts the countdown without the old time
   for (const remaining of remainingLabels) {
     await h.second();
     assert.equal(h.countdown(), remaining);
-    assert.equal(h.fetchCalls, 0);
+    assert.deepEqual(h.requests, []);
   }
   await h.second();
   assert.deepEqual(h.switches, [{account:'sample-work-extra', url:'https://github.com/another-team/repo'}]);
@@ -1178,7 +1253,7 @@ test('pages needing the same account keep the running countdown', async t => {
   await h.navigate('/sample-team/repo/issues#issuecomment-1');
   assert.equal(h.countdown(), secondsLabel(COUNTDOWN - 2));
   await advance(h, COUNTDOWN - 3);
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.requests, []);
   await h.second();
   assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/issues#issuecomment-1'}]);
 });
@@ -1191,7 +1266,7 @@ test('dismissing a countdown started after navigation cancels it', async t => {
   h.document.querySelector('[data-gas-switch-dismiss]').click();
   await advance(h, COUNTDOWN + 1);
   await h.tick();
-  assert.equal(h.fetchCalls, 0);
+  assert.deepEqual(h.requests, []);
   assert.deepEqual(h.switches, []);
 });
 
@@ -1199,7 +1274,8 @@ test('a failed countdown switch leaves the button for an explicit retry without 
   const h = setup(t, {values:manualSettings(), fetch:async () => { throw new Error('offline'); }});
   await h.flush();
   await advance(h, COUNTDOWN);
-  assert.equal(h.fetchCalls, 1);
+  // The failed last-second prefetch is asked once more when the countdown ends.
+  assert.equal(h.fetchCalls, 2);
   assert.match(h.document.querySelector('[data-gas-notice]').textContent, /offline/);
   assert.equal(h.document.querySelector('[data-gas-switch]')?.disabled, false);
   assert.equal(h.countdown(), null);
@@ -1221,29 +1297,153 @@ test('a failed countdown switch leaves the button for an explicit retry without 
     assert.equal(h.countdown(), null);
   }
   await idle();
-  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.fetchCalls, 2);
   h.document.querySelector('[data-gas-switch]').click();
   await h.flush();
-  assert.equal(h.fetchCalls, 2);
+  assert.equal(h.fetchCalls, 3);
   assert.equal(h.countdown(), null);
   await idle();
-  assert.equal(h.fetchCalls, 2);
+  assert.equal(h.fetchCalls, 3);
 });
 
 test('a page needing another account after a failed countdown counts down again', async t => {
   const h = setup(t, {values:twoTargetSettings(), fetch:async () => { throw new Error('offline'); }});
   await h.flush();
   await advance(h, COUNTDOWN);
-  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.fetchCalls, 2);
   await h.navigate('/another-team/repo');
   assert.equal(h.countdown(), '4초');
   await h.second();
   await h.navigate('/sample-team/repo');
   assert.equal(h.countdown(), '4초');
+  h.document.querySelector('[data-gas-notice]').remove();
+  await advance(h, COUNTDOWN - 1);
+  assert.equal(h.countdown(), '1초');
+  assert.equal(h.document.querySelector('[data-gas-notice]'), null);
+  await h.second();
+  assert.equal(h.countdown(), null);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /offline/);
+});
+
+test('the countdown asks the server only in its last second and switches the moment it ends', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await advance(h, COUNTDOWN - 2);
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [0, 0]);
+  await h.second();
+  assert.equal(h.countdown(), '1초');
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [1, 1]);
+  assert.deepEqual(h.requests, []);
+  await h.second();
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual([h.fetchCalls, h.panelCalls, h.rootCalls], [1, 1, 0]);
+});
+
+test('dismissing before the last second sends no requests at all', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await advance(h, COUNTDOWN - 2);
+  h.document.querySelector('[data-gas-switch-dismiss]').click();
+  await advance(h, COUNTDOWN + 1);
+  await h.tick();
+  assert.deepEqual([h.fetchCalls, h.panelCalls, h.requests.length], [0, 0, 0]);
+});
+
+test('a countdown restarted after refocus asks the server only in its own last second', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
   await advance(h, COUNTDOWN - 1);
   assert.equal(h.fetchCalls, 1);
+  await h.deactivate();
+  await h.activate();
+  await advance(h, COUNTDOWN - 1);
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [2, 2]);
   await h.second();
+  assert.equal(h.requests.length, 1);
+  assert.deepEqual([h.fetchCalls, h.panelCalls], [2, 2]);
+});
+
+test('a session change before the last second reloads the stale page instead of switching', async t => {
+  let session = 'sample-personal';
+  const h = setup(t, {values:manualSettings(), fetch:async () => ({ok:true, url:'https://github.com/', text:async()=>`<meta name="user-login" content="${session}">`})});
+  await h.flush();
+  await h.second();
+  session = 'sample-work-extra';
+  await advance(h, COUNTDOWN - 1);
+  assert.deepEqual(h.requests, []);
+  assert.equal(h.values.has('refresh'), true);
+  assert.equal(h.navigations.length, 1);
+});
+
+test('a failed last-second prefetch is asked again when the countdown ends', async t => {
+  let calls = 0;
+  const h = setup(t, {values:manualSettings(), fetch:async () => {
+    if (++calls === 1) throw new Error('offline');
+    return {ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'};
+  }});
+  await h.flush();
+  await advance(h, COUNTDOWN);
+  assert.equal(calls, 2);
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+  assert.equal(h.document.querySelector('[data-gas-notice]'), null);
+});
+
+test('a failed prefetched account list is asked again when the countdown ends', async t => {
+  let panels = 0;
+  const h = setup(t, {values:manualSettings(), sidePanel:response => ++panels === 1 ? Promise.reject(new TypeError('Failed to fetch')) : response});
+  await h.flush();
+  await advance(h, COUNTDOWN);
+  assert.equal(h.panelCalls, 2);
+  assert.equal(h.fetchCalls, 1);
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+});
+
+test('a retry after a failed countdown switch asks the server again instead of reusing the prefetch', async t => {
+  const h = setup(t, {values:manualSettings(), switchResponse:() => json(422, {error:'Session expired'}, 'https://github.com/switch_account')});
+  await h.flush();
+  await advance(h, COUNTDOWN);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.fetchCalls, 1);
+  h.document.querySelector('[data-gas-switch]').click();
+  await h.flush();
   assert.equal(h.fetchCalls, 2);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /반복 전환/);
+});
+
+const hanging = (input, init) => new Promise((resolve, reject) => {
+  init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), {name:'AbortError'})));
+});
+
+test('a hanging server check times out and leaves the button for a retry', async t => {
+  const h = setup(t, {values:manualSettings(), fetch:hanging});
+  await h.flush();
+  await advance(h, COUNTDOWN);
+  await h.settle();
+  await h.settle();
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /시간이 초과/);
+  assert.equal(h.document.querySelector('[data-gas-switch]')?.disabled, false);
+  assert.deepEqual(h.requests, []);
+});
+
+test('a hanging automatic server check times out instead of blocking later checks', async t => {
+  const h = setup(t, {fetch:hanging});
+  await h.flush();
+  await h.settle();
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /시간이 초과/);
+  assert.deepEqual(h.requests, []);
+});
+
+test('a prefetch still loading when the countdown ends is awaited instead of repeated', async t => {
+  let release;
+  const h = setup(t, {values:manualSettings(), fetch:() => new Promise(resolve => { release = resolve; })});
+  await h.flush();
+  await advance(h, COUNTDOWN);
+  assert.equal(h.countdown(), null);
+  assert.deepEqual(h.requests, []);
+  release({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'});
+  await h.flush();
+  assert.deepEqual(h.switches.map(item => item.account), ['sample-work']);
+  assert.equal(h.fetchCalls, 1);
 });
 
 test('automatic switching never shows a countdown', async t => {
