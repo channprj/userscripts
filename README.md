@@ -19,7 +19,7 @@
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
-| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 메뉴를 열지 않고 계정을 바로 또는 4초 카운트다운 뒤 전환합니다. | 0.6.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
+| GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 메뉴를 열지 않고 계정을 바로 또는 4초 카운트다운 뒤 전환합니다. 다른 탭에서 계정이 바뀐 탭도 직접 새로고침하지 않아도 맞춥니다. | 0.6.5 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
 
 ---
@@ -118,9 +118,11 @@ iCloud Photos 웹에서 사진 상세나 그리드에서 우클릭 → **Copy Ph
 
 GitHub의 **Account switcher**에 추가한 계정 중 접속한 organization/user 또는 Enterprise 경로에 맞는 계정으로 자동 전환합니다. 메뉴를 열지 않고 Account switcher가 보내는 전환 요청을 바로 보냅니다. 규칙에 없는 경로에서는 기본 개인 계정을 사용하며, `/settings` 같은 GitHub 설정·시스템 페이지에서는 전환하지 않습니다.
 
-전체 자동 전환을 끄면 자동 전환 예외 계정을 제외한 나머지 대상에는 전환 버튼을 사용합니다. 현재 계정과 전환할 계정이 다를 때 화면 상단 중앙에 **@계정명 계정으로 전환** 버튼이 남은 초와 줄어드는 게이지와 함께 표시됩니다. 4초가 지나면 현재 주소를 유지하며 해당 계정으로 전환합니다. 기다리지 않으려면 버튼을 눌러 바로 전환합니다. 전체 자동 전환은 계속 꺼진 상태로 유지됩니다.
+전체 자동 전환을 끄면 자동 전환 예외 계정을 제외한 나머지 대상에는 전환 버튼을 사용합니다. 현재 계정과 전환할 계정이 다를 때 화면 상단 중앙에 **@계정명 계정으로 전환** 버튼이 남은 초와 줄어드는 게이지와 함께 표시됩니다. 4초가 지나면 현재 주소를 유지하며 해당 계정으로 전환합니다. 기다리지 않으려면 버튼을 눌러 바로 전환합니다. 전환이 시작되면 버튼이 **@계정명 계정으로 전환 중…**으로 바뀌어 페이지가 새로고침될 때까지 그 자리에 머뭅니다. 이때는 **×**도 누를 수 없습니다. 전환에 실패하면 버튼이 원래대로 돌아옵니다. 전체 자동 전환은 계속 꺼진 상태로 유지됩니다.
 
 탭을 벗어나거나, 입력란에 내용을 쓰거나, 설정 창을 열면 카운트다운을 멈추고 버튼을 숨깁니다. 버튼이 다시 나타나면 4초부터 다시 셉니다. 카운트다운으로 시작한 전환이 실패하면 같은 계정으로 전환할 페이지에서는 다시 세지 않습니다. 버튼을 눌러 직접 다시 시도할 수 있습니다.
+
+다른 탭에서 계정을 바꾸면 GitHub는 기존 탭에 **You switched accounts on another tab or window. Reload to refresh your session.** 안내를 띄웁니다. 이 안내가 뜬 탭으로 돌아오면 현재 로그인 계정을 서버에 확인합니다. 이미 이 페이지에 맞는 계정이면 바로 새로고침합니다. 다른 계정이면 먼저 새로고침하지 않고 그 자리에서 전환한 뒤 한 번만 새로고침합니다. 전체 자동 전환을 끈 상태라면 확인한 계정을 기준으로 버튼과 4초 카운트다운을 보여 주며, 확인이 끝나기 전에는 버튼을 띄우지 않습니다. `/settings` 같은 설정·시스템 페이지는 전환하지 않고 새로고침만 합니다. 입력 중인 내용이 있으면 새로고침하지 않습니다. github.com 실측에서는 안내가 뜬 탭으로 돌아온 지 약 0.3초 만에 버튼이 나타났고, 4초 카운트다운을 포함해 약 5.8초 만에 전환과 새로고침이 끝났습니다. 이전에는 이 경우 직접 새로고침해야 했습니다.
 
 버튼 오른쪽의 **×**를 누르면 카운트다운을 취소하고 전환 버튼을 숨깁니다. 계정이나 자동 전환 설정은 바뀌지 않습니다. 줄 번호 링크나 같은 organization의 다른 페이지처럼 전환할 계정이 같은 페이지 사이를 이동하면 숨긴 상태를 유지합니다. 다른 계정으로 전환할 페이지로 이동하거나, 저장된 설정이 바뀌거나, 페이지를 새로고침하면 다시 표시합니다.
 
@@ -145,6 +147,8 @@ enterprises/* = sample-work
 - URL 직접 접근과 GitHub 내부 페이지 이동을 감지합니다. 지원 브라우저에서는 전환 작업이 진행 중이지 않을 때 주소 변경 이벤트로 계정 확인을 바로 시작합니다. 주기적으로 주소를 확인하는 기존 감지도 함께 유지합니다.
 - 전환할 때 메뉴를 열지 않습니다. Account switcher가 쓰는 계정 목록(`/_side-panels/user.json`)에서 대상 계정의 세션을 찾아, GitHub와 같은 전환 요청(`POST /switch_account`)을 보냅니다. 성공하면 GitHub처럼 현재 페이지를 새로고침해 방문한 주소를 유지합니다. 입력 중인 내용이 있거나 설정 창이 열려 있으면 새로고침하지 않고 안내만 표시합니다.
 - 현재 로그인 계정은 전체 페이지 대신 GitHub 상단 메뉴가 쓰는 작은 JSON(`/_global-navigation/payloads.json`)으로 확인합니다. 전환이 필요해 보이면 계정 목록도 동시에 요청하므로, 전환 요청을 보내기 전 대기 시간이 실측 약 1초에서 약 0.3초로 줄었습니다. 이 정보를 받지 못하면 예전처럼 GitHub 첫 페이지로 확인합니다.
+- 페이지 전체가 로드될 때까지 기다리지 않습니다. 로그인 계정이 적힌 `<head>`를 다 읽고 본문이 시작되는 순간 동작하므로(`@run-at document-start`), 버튼과 자동 전환이 더 빨리 시작됩니다. github.com 실측에서 버튼이 본문 시작 약 0.02초 뒤에 나타났습니다. 이전에는 약 0.15초 뒤였습니다.
+- 카운트다운은 4초 뒤 마감 시각을 기준으로 셉니다. 페이지가 바빠 숫자 표시가 늦어져도 전환은 게이지가 끝나는 순간 시작합니다.
 - 카운트다운의 마지막 1초 동안 이 정보를 미리 받아 둡니다. 0초가 되면 확인을 기다리지 않고 바로 전환 요청을 보냅니다. 그 전에 **×**로 취소하면 아무 요청도 보내지 않습니다. 미리 받기에 실패했으면 0초가 될 때 한 번 더 확인합니다.
 - 전환 응답을 받지 못하면 현재 로그인 계정을 다시 확인합니다. 이미 전환됐으면 새로고침하고, 아니면 실패를 알립니다.
 - GitHub가 계정 목록을 더 이상 같은 형식으로 주지 않으면 예전처럼 **프로필 메뉴 → Account switcher → 대상 계정** 순서로 메뉴를 클릭해 전환합니다.
@@ -171,7 +175,7 @@ enterprises/* = sample-work
 #### 동작 범위와 예외
 
 - `https://github.com/*`에 적용됩니다. GitHub.com의 Enterprise Managed User 계정도 사용할 수 있습니다. 별도 도메인의 Enterprise Server에는 적용되지 않습니다.
-- 현재 보고 있는 활성 탭에서만 전환합니다. GitHub 로그인은 같은 브라우저의 탭들이 공유하므로 탭마다 계정을 독립적으로 유지하지는 않습니다. 다른 탭에서 계정이 바뀌었다면 현재 계정을 확인하고 필요할 때 페이지를 새로고침합니다.
+- 현재 보고 있는 활성 탭에서만 전환합니다. GitHub 로그인은 같은 브라우저의 탭들이 공유하므로 탭마다 계정을 독립적으로 유지하지는 않습니다. 다른 탭에서 계정이 바뀌었다면 현재 계정을 확인하고, 필요하면 이 페이지에서 바로 전환하거나 새로고침합니다. 새로고침한 직후에도 계정이 계속 어긋나면 반복하지 않고 안내만 표시합니다. 이 보호는 탭마다 따로 적용되므로 다른 탭의 새로고침 때문에 이 탭이 멈추지는 않습니다.
 - `/settings`, `/notifications`, `/pulls`, `/issues`, `/codespaces`, `/search`, `/explore`, `/marketplace`처럼 GitHub이 예약한 설정·시스템 경로에서는 전환하지 않고 현재 계정을 유지합니다. 이 페이지들은 특정 organization/user가 아니라 로그인한 계정 자체를 다루기 때문입니다. 반면 `/sample-team/repo/settings`나 `/orgs/sample-team/settings`처럼 organization/user 이름으로 시작하는 설정 경로에는 규칙을 그대로 적용합니다.
 - 로그인·로그아웃·SSO·2FA 등 인증 화면에서는 자동 전환을 보류합니다. 계정이 없거나 세션이 만료되면 직접 계정을 추가하거나 재인증한 후 **다시 시도**를 누르세요. 비밀번호와 인증 토큰은 수집하거나 저장하지 않습니다.
 - 댓글이나 폼을 편집한 뒤 해당 입력란이 화면에 남아 있으면 전환을 보류합니다. 내용을 저장한 다음 페이지를 새로고침하면 다시 동작합니다.
