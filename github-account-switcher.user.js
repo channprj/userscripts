@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.4.1
+// @version      0.5.0
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -31,6 +31,12 @@
     'sponsors', 'stars', 'topics', 'trending', 'watching',
   ]);
   const SWITCH_COOLDOWN = 30_000;
+  // GitHub's own account switcher reads stashed sessions from ACCOUNTS_PATH and
+  // posts the selected one to SWITCH_PATH, so no menu needs to be opened.
+  const ACCOUNTS_PATH = '/_side-panels/user.json';
+  const SWITCH_PATH = '/switch_account';
+  const SESSION_TIMEOUT = 8_000;
+  const SWITCH_TIMEOUT = 15_000;
   let busy = false;
   let manualButton = null;
   let manualButtonSnapshot = null;
@@ -256,7 +262,8 @@
     });
   }
 
-  async function switchAccount(target, valid) {
+  // Fallback for GitHub variants without the stashed-account endpoint.
+  async function switchWithMenu(target, valid) {
     let opened = false;
     let submitted = false;
     try {
@@ -289,6 +296,83 @@
     } finally {
       if (opened && !submitted) buttonNamed('Close user navigation menu')?.click();
     }
+  }
+
+  // Mirror the headers of GitHub's verifiedFetch. The fresh session document
+  // carries the newest nonce; the current page is the fallback.
+  function verifiedHeaders(doc) {
+    const meta = name => doc.querySelector(`meta[name="${name}"]`)?.content
+      || document.querySelector(`meta[name="${name}"]`)?.content;
+    const headers = { Accept: 'application/json', 'GitHub-Verified-Fetch': 'true', 'X-Requested-With': 'XMLHttpRequest' };
+    if (meta('fetch-nonce')) headers['X-Fetch-Nonce'] = meta('fetch-nonce');
+    if (meta('release')) headers['X-GitHub-Client-Version'] = meta('release');
+    return headers;
+  }
+
+  async function withTimeout(ms, run) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), ms);
+    try { return await run(controller.signal); } finally { clearTimeout(timeout); }
+  }
+
+  async function sessionDocument(signal) {
+    const response = await fetch('/', { credentials: 'same-origin', cache: 'no-store', signal });
+    if (!response.ok || new URL(response.url).origin !== location.origin) throw new Error('현재 GitHub 계정을 확인하지 못했습니다. 다시 시도를 눌러주세요.');
+    return new DOMParser().parseFromString(await response.text(), 'text/html');
+  }
+
+  // Returns null when GitHub no longer exposes stashed accounts in this shape.
+  async function stashedAccounts(headers, signal) {
+    const response = await fetch(ACCOUNTS_PATH, { credentials: 'same-origin', cache: 'no-store', headers, signal });
+    if (!response.ok || new URL(response.url).origin !== location.origin) return null;
+    const data = await response.json().catch(error => { if (error.name === 'AbortError') throw error; return null; });
+    const accounts = data?.stashedAccounts;
+    return Array.isArray(accounts) && accounts.every(account => typeof account?.login === 'string'
+      && ['string', 'number'].includes(typeof account.userSessionId)) ? accounts : null;
+  }
+
+  // Reload like GitHub, or follow its SSO redirect, unless unsaved input would be lost.
+  function leavePage(redirect) {
+    if (pendingEdits() || editing) {
+      notice(redirect ? '대상 계정의 SSO 인증이 필요합니다. 입력 중인 내용을 저장한 뒤 다시 시도해주세요.'
+        : '계정을 전환했습니다. 입력 중인 내용을 저장한 뒤 페이지를 새로고침해주세요.');
+    } else if (redirect) location.assign(redirect);
+    else location.reload();
+  }
+
+  async function switchAccount(target, doc, valid, signal) {
+    const headers = verifiedHeaders(doc);
+    const accounts = await stashedAccounts(headers, signal);
+    if (!valid()) return;
+    if (!accounts) { await switchWithMenu(target, valid); return; }
+    const account = accounts.find(account => normalized(account.login) === target);
+    if (!account || String(account.userSessionId) === '') {
+      throw new Error('대상 계정이 없거나 세션이 만료되었습니다. Account switcher에서 계정을 추가하거나 다시 로그인해주세요.');
+    }
+    const body = new FormData();
+    body.append('user_session_id', String(account.userSessionId));
+    body.append('from', 'nav_panel');
+    // Persist before posting so a rejected switch / reload cannot create a loop.
+    GM_setValue('attempt', { target, at: Date.now() });
+    // The POST has its own time budget: aborting it cannot undo a switch the server already made.
+    const result = await withTimeout(SWITCH_TIMEOUT, async postSignal => {
+      const response = await fetch(SWITCH_PATH, { method: 'POST', credentials: 'same-origin', headers, body, signal: postSignal });
+      return { ok: response.ok, data: await response.json() };
+    }).catch(() => null);
+    if (result?.ok && result.data?.success) { leavePage(); return; }
+    if (result?.data?.reason === 'emu_sso_redirect' && typeof result.data.redirect_to === 'string') {
+      let redirect = null;
+      try { redirect = new URL(result.data.redirect_to, location.href); } catch {}
+      if (!/^https?:$/.test(redirect?.protocol ?? '')) throw new Error('대상 계정의 재인증이 필요합니다. GitHub에서 직접 로그인해주세요.');
+      leavePage(redirect.href);
+      return;
+    }
+    if (typeof result?.data?.error === 'string' && result.data.error.trim()) {
+      throw new Error(`계정을 전환하지 못했습니다: ${result.data.error.trim()}`);
+    }
+    // Without a clear answer the switch may still have happened, so trust the server session.
+    if (login(await withTimeout(SESSION_TIMEOUT, sessionDocument)) === target) { leavePage(); return; }
+    throw new Error('계정을 전환하지 못했습니다. Account switcher에서 계정을 다시 추가하거나 다시 로그인해주세요.');
   }
 
   function refreshManualButton() {
@@ -361,14 +445,12 @@
     busy = true;
     refreshManualButton();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8_000);
+    const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT);
     try {
       const switchTarget = manual?.target ?? target;
       // A background tab's meta tag may describe the previous shared session.
       // Check the server before using any menu cached in that tab.
-      const response = await fetch('/', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
-      if (!response.ok || new URL(response.url).origin !== location.origin) throw new Error('현재 GitHub 계정을 확인하지 못했습니다. 다시 시도를 눌러주세요.');
-      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const doc = await sessionDocument(controller.signal);
       const current = login(doc);
       if (!valid()) return;
       if (!current) throw new Error('GitHub 로그인이 필요합니다. 계정들을 먼저 로그인해주세요.');
@@ -387,7 +469,7 @@
       if (previous && Date.now() - previous.at < (previous.target === switchTarget ? SWITCH_COOLDOWN : 2_000)) {
         throw new Error('반복 전환을 멈췄습니다. 계정 상태를 확인한 뒤 매니저 메뉴에서 다시 시도를 눌러주세요.');
       }
-      await switchAccount(switchTarget, valid);
+      await switchAccount(switchTarget, doc, valid, controller.signal);
     } catch (error) {
       if (valid()) notice(error.name === 'AbortError' ? '계정 확인 시간이 초과되었습니다. 매니저 메뉴에서 다시 시도를 눌러주세요.' : error.message);
     } finally {

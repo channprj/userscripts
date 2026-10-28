@@ -16,31 +16,45 @@ const enterpriseConfig = {
   rules: [...config.rules, { owner: 'enterprises/*', account: 'sample-work' }],
 };
 
-// Sanitized fixture based on GitHub's React user navigation / account menu.
+const json = (status, body, url) => ({ ok: status >= 200 && status < 300, status, url, json: async () => body });
+
+// Sanitized fixture based on GitHub's React user navigation / account menu and
+// the stashed-account and switch endpoints that menu uses.
 // Only the GitHub session and userscript-manager boundaries are simulated.
 function setup(t, options = {}) {
   const errors = [];
+  const navigations = [];
   const virtualConsole = new VirtualConsole();
-  virtualConsole.on('jsdomError', error => errors.push(error));
-  const dom = new JSDOM(`<!doctype html><meta name="user-login" content="${options.current ?? 'sample-personal'}">
+  // jsdom reports reloads and redirects as unimplemented navigation.
+  virtualConsole.on('jsdomError', error => (/navigation/i.test(error.message) ? navigations : errors).push(error));
+  const dom = new JSDOM(`<!doctype html><meta name="user-login" content="${options.current ?? 'sample-personal'}"><meta name="fetch-nonce" content="v2:page-nonce"><meta name="release" content="fixture-release">
     <header><button aria-labelledby="user-menu-label" data-login="sample-personal">Profile</button><span id="user-menu-label" hidden>Open user navigation menu</span></header><main>${options.draft ? '<textarea>draft</textarea>' : ''}</main>`, {
     url: `https://github.com${options.route ?? '/sample-team/repo/pull/42?tab=files#diff-1'}`,
     runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole,
   });
+  let switched = 0;
   t.after(() => {
     dom.window.close();
-    if (!options.expectReload) assert.deepEqual(errors, []);
+    assert.deepEqual(errors, []);
+    // Every reload must come from a completed switch or the stale-page guard.
+    assert.equal(navigations.length, options.navigations ?? switched + writes.filter(key => key === 'refresh').length,
+      'unexpected page navigation');
   });
   const { window } = dom;
   const { document } = window;
   const values = options.values ?? new Map([['settings', structuredClone(config)]]);
   const menus = new Map();
-  const clicks = [];
-  const attemptsAtClick = [];
+  const switches = [];
+  const attemptsAtSwitch = [];
+  const requests = [];
   const menuClicks = { profile: 0, switcher: 0 };
   const intervals = [];
   const writes = [];
+  const accounts = options.accounts ?? ['sample-personal', 'sample-work', 'sample-work-extra'];
+  const sessionIds = Object.fromEntries(accounts.map((account, index) => [account, 1000 + index]));
+  const sessionLogin = options.session ?? options.current ?? 'sample-personal';
   let fetchCalls = 0;
+  let panelCalls = 0;
   let focused = options.focused ?? true;
   let visible = options.visible ?? true;
   Object.defineProperty(document, 'visibilityState', { get: () => visible ? 'visible' : 'hidden' });
@@ -52,12 +66,38 @@ function setup(t, options = {}) {
   window.setInterval = fn => { intervals.push(fn); return intervals.length; };
   const timeout = window.setTimeout.bind(window);
   window.setTimeout = (fn, ms) => timeout(fn, Math.min(ms, 20));
-  window.fetch = options.fetch ?? (async () => ({
+  const sessionFetch = options.fetch ?? (async () => ({
     ok: true, url: 'https://github.com/',
-    text: async () => `<meta name="user-login" content="${options.session ?? options.current ?? 'sample-personal'}">`,
+    text: async () => `<meta name="user-login" content="${sessionLogin}"><meta name="fetch-nonce" content="v2:session-nonce">`,
   }));
-  const fetchImpl = window.fetch;
-  window.fetch = (...args) => { fetchCalls++; return fetchImpl(...args); };
+  window.fetch = async (input, init = {}) => {
+    const url = new URL(String(input), window.location.href);
+    if (url.pathname === '/_side-panels/user.json') {
+      panelCalls++;
+      if (options.sidePanel === 'missing') return json(404, {}, url.href);
+      if (options.sidePanel === 'malformed') return json(200, { stashedAccounts: null }, url.href);
+      if (options.sidePanel === 'renamed') return json(200, { stashedAccounts: [{ username: 'sample-work', sessionId: 1001 }] }, url.href);
+      // GitHub lists only the other signed-in accounts as stashed sessions.
+      const response = json(200, { stashedAccounts: accounts.filter(account => account !== sessionLogin).map(account => ({
+        login: account, name: 'Display Name', avatarUrl: '', userSessionId: sessionIds[account],
+      })) }, url.href);
+      return typeof options.sidePanel === 'function' ? options.sidePanel(response) : response;
+    }
+    if (url.pathname === '/switch_account') {
+      const body = Object.fromEntries(init.body);
+      requests.push({ method: init.method, headers: { ...init.headers }, body });
+      attemptsAtSwitch.push(values.get('attempt') ?? null);
+      switches.push({
+        account: Object.keys(sessionIds).find(account => String(sessionIds[account]) === body.user_session_id),
+        url: window.location.href,
+      });
+      if (options.switchResponse) return options.switchResponse(window);
+      switched++;
+      return json(200, { success: true }, url.href);
+    }
+    fetchCalls++;
+    return sessionFetch(input, init);
+  };
   const userButton = document.querySelector('header button');
   userButton.addEventListener('click', () => {
     menuClicks.profile++;
@@ -80,15 +120,15 @@ function setup(t, options = {}) {
       const menu = document.createElement('ul');
       menu.setAttribute('role', 'menu');
       menu.setAttribute('aria-labelledby', 'switcher-label');
-      for (const [index, account] of (options.accounts ?? ['sample-personal', 'sample-work', 'sample-work-extra']).entries()) {
+      for (const [index, account] of accounts.entries()) {
         const item = document.createElement('li');
         item.setAttribute('role', 'menuitem');
         item.setAttribute('aria-labelledby', `account-label-${index}`);
         if (options.expired === account) item.setAttribute('aria-disabled', 'true');
         item.innerHTML = `<span id="account-label-${index}" data-component="ActionList.Item.Label">${account}</span><span>Display Name</span>`;
         item.addEventListener('click', () => {
-          attemptsAtClick.push(values.get('attempt') ?? null);
-          clicks.push({ account, url: window.location.href });
+          attemptsAtSwitch.push(values.get('attempt') ?? null);
+          switches.push({ account, url: window.location.href });
         });
         menu.append(item);
       }
@@ -114,7 +154,8 @@ function setup(t, options = {}) {
     for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
   };
   return {
-    window, document, values, menus, clicks, attemptsAtClick, menuClicks, writes, errors, flush, get fetchCalls() { return fetchCalls; },
+    window, document, values, menus, switches, attemptsAtSwitch, requests, menuClicks, writes, errors, navigations, flush,
+    get fetchCalls() { return fetchCalls; }, get panelCalls() { return panelCalls; },
     async tick() { for (const fn of intervals) fn(); await flush(); },
     async settle() { await new Promise(resolve => setTimeout(resolve, 35)); await flush(); },
     async navigate(route) { window.history.pushState({}, '', route); await this.tick(); },
@@ -143,35 +184,168 @@ function setup(t, options = {}) {
 test('switches the exact configured account and retains the full destination', async t => {
   const h = setup(t);
   await h.flush();
-  assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
-  assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
-  assert.deepEqual(h.attemptsAtClick, [{target:'sample-work', at:h.values.get('attempt').at}]);
+  assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+  assert.deepEqual(h.attemptsAtSwitch, [{target:'sample-work', at:h.values.get('attempt').at}]);
+  assert.equal(h.navigations.length, 1);
 });
 
-test('uses only the remaining menu clicks when the profile menu is already open', async t => {
-  const h = setup(t, {preopenProfile:true}); await h.flush();
+test('switches with GitHub\'s stashed session request without opening any menu', async t => {
+  const h = setup(t);
+  await h.flush();
+  assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
+  assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
+  assert.equal(h.panelCalls, 1);
+  assert.deepEqual(h.requests, [{method:'POST', body:{user_session_id:'1001', from:'nav_panel'}, headers:{
+    Accept:'application/json', 'GitHub-Verified-Fetch':'true', 'X-Requested-With':'XMLHttpRequest',
+    'X-Fetch-Nonce':'v2:session-nonce', 'X-GitHub-Client-Version':'fixture-release',
+  }}]);
+});
+
+test('uses the page nonce when the verified session document has none', async t => {
+  const h = setup(t, {fetch:async () => ({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'})});
+  await h.flush();
+  assert.equal(h.requests[0]?.headers['X-Fetch-Nonce'], 'v2:page-nonce');
+});
+
+for (const sidePanel of ['missing', 'malformed', 'renamed']) {
+  test(`falls back to the account menu when stashed accounts are ${sidePanel}`, async t => {
+    const h = setup(t, {sidePanel}); await h.flush();
+    assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+    assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
+    assert.deepEqual(h.requests, []);
+    assert.deepEqual(h.attemptsAtSwitch, [{target:'sample-work', at:h.values.get('attempt').at}]);
+  });
+}
+
+test('menu fallback uses only the remaining menu clicks when the profile menu is already open', async t => {
+  const h = setup(t, {preopenProfile:true, sidePanel:'missing'}); await h.flush();
   assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
-  assert.equal(h.clicks.length, 1);
+  assert.equal(h.switches.length, 1);
   assert.ok(h.document.querySelector('[data-fixture-navigation]'));
 });
 
-test('uses one menu click when the account list is already expanded', async t => {
-  const h = setup(t, {preopenAccounts:true}); await h.flush();
+test('menu fallback uses one menu click when the account list is already expanded', async t => {
+  const h = setup(t, {preopenAccounts:true, sidePanel:'missing'}); await h.flush();
   assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
-  assert.equal(h.clicks.length, 1);
+  assert.equal(h.switches.length, 1);
   assert.ok(h.document.querySelector('[data-fixture-navigation]'));
 });
+
+test('a rejected switch reports GitHub\'s error without reloading or retrying', async t => {
+  const h = setup(t, {switchResponse:() => json(422, {error:'Session expired', reason:'expired'}, 'https://github.com/switch_account')});
+  await h.flush();
+  assert.equal(h.switches.length, 1);
+  assert.equal(h.navigations.length, 0);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /전환하지 못했습니다: Session expired/);
+  assert.equal(h.values.get('attempt')?.target, 'sample-work');
+  await h.tick();
+  assert.equal(h.switches.length, 1);
+});
+
+test('an unsuccessful switch without details rechecks the session and explains how to recover', async t => {
+  const h = setup(t, {switchResponse:() => json(200, {success:false}, 'https://github.com/switch_account')});
+  await h.flush();
+  assert.equal(h.fetchCalls, 2);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /다시 추가하거나 다시 로그인/);
+});
+
+for (const failure of ['network', 'non-JSON']) {
+  test(`a ${failure} switch response reloads when the server session already changed`, async t => {
+    let sessions = 0;
+    const h = setup(t, {
+      navigations:1,
+      fetch:async () => ({ok:true, url:'https://github.com/', text:async()=>`<meta name="user-login" content="${++sessions === 1 ? 'sample-personal' : 'sample-work'}">`}),
+      switchResponse:() => failure === 'network' ? Promise.reject(new TypeError('Failed to fetch'))
+        : {ok:true, status:200, url:'https://github.com/switch_account', json:async () => { throw new SyntaxError('Unexpected token <'); }},
+    });
+    await h.flush();
+    assert.equal(h.switches.length, 1);
+    assert.equal(h.fetchCalls, 2);
+    assert.equal(h.document.querySelector('[data-gas-notice]'), null);
+  });
+}
+
+test('a lost switch response without a server change reports the failure', async t => {
+  const h = setup(t, {switchResponse:() => Promise.reject(new TypeError('Failed to fetch'))});
+  await h.flush();
+  assert.equal(h.fetchCalls, 2);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /전환하지 못했습니다/);
+  await h.tick();
+  assert.equal(h.switches.length, 1);
+});
+
+for (const redirect of ['/enterprises/sample-company/sso?return_to=%2Fsample-team', 'https://sso.example.test/login']) {
+  test(`an enterprise SSO response follows GitHub's redirect: ${redirect}`, async t => {
+    const h = setup(t, {navigations:1, switchResponse:() => json(200, {success:false, reason:'emu_sso_redirect', redirect_to:redirect}, 'https://github.com/switch_account')});
+    await h.flush();
+    assert.equal(h.document.querySelector('[data-gas-notice]'), null);
+  });
+}
+
+test('an enterprise SSO response never follows a script URL', async t => {
+  const h = setup(t, {switchResponse:() => json(200, {success:false, reason:'emu_sso_redirect', redirect_to:'javascript:alert(1)'}, 'https://github.com/switch_account')});
+  await h.flush();
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /재인증/);
+});
+
+for (const outcome of ['success', 'emu_sso_redirect']) {
+  test(`a draft typed during the switch request is kept on ${outcome}`, async t => {
+    const h = setup(t, {switchResponse:window => {
+      const control = window.document.createElement('textarea');
+      window.document.querySelector('main').append(control);
+      control.dispatchEvent(new window.Event('input', {bubbles:true}));
+      return json(200, outcome === 'success' ? {success:true} : {success:false, reason:outcome, redirect_to:'/enterprises/sample-company/sso'}, 'https://github.com/switch_account');
+    }});
+    await h.flush();
+    assert.equal(h.switches.length, 1);
+    assert.match(h.document.querySelector('[data-gas-notice]').textContent, outcome === 'success' ? /새로고침/ : /SSO 인증/);
+  });
+}
+
+test('settings opened during the switch request are kept instead of reloading', async t => {
+  let h;
+  h = setup(t, {switchResponse:() => {
+    h.menus.get('GitHub Account Switcher: 설정')();
+    return json(200, {success:true}, 'https://github.com/switch_account');
+  }});
+  await h.flush();
+  assert.equal(h.switches.length, 1);
+  assert.ok(h.document.querySelector('[data-gas-settings]'));
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /새로고침/);
+});
+
+for (const mutation of ['route', 'settings', 'edit', 'activation']) {
+  test(`a ${mutation} change while stashed accounts load cancels the switch request`, async t => {
+    let release;
+    const h = setup(t, {sidePanel:response => new Promise(resolve => { release = () => resolve(response); })});
+    await h.flush();
+    assert.equal(h.panelCalls, 1);
+    if (mutation === 'route') h.window.history.pushState({}, '', '/another-owner');
+    if (mutation === 'settings') h.values.set('settings', {...config, personal:'other-personal'});
+    if (mutation === 'edit') {
+      const control = h.document.createElement('textarea');
+      h.document.querySelector('main').append(control);
+      control.dispatchEvent(new h.window.Event('input', {bubbles:true}));
+    }
+    if (mutation === 'activation') await h.deactivate();
+    release();
+    await h.flush();
+    assert.deepEqual(h.requests, []);
+    assert.equal(h.switches.length, 0);
+    assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
+  });
+}
 
 for (const route of ['/sample-team', '/SAMPLE-TEAM/repo', '/orgs/sample-team/projects/1', '/users/sample-team/projects/1']) {
   test(`matches owner routes: ${route}`, async t => {
     const h = setup(t, {route}); await h.flush();
-    assert.equal(h.clicks[0]?.account, 'sample-work');
+    assert.equal(h.switches[0]?.account, 'sample-work');
   });
 }
 for (const route of ['/', '/sample-team-extra/repo', '/another-owner/repo', '/another-owner/repo?q=sample-team', '/enterprises/sample-team/settings', '/%E0%A4%A/repo']) {
   test(`returns to the personal account: ${route}`, async t => {
     const h = setup(t, {route, current:'sample-work'}); await h.flush();
-    assert.equal(h.clicks[0]?.account, 'sample-personal');
+    assert.equal(h.switches[0]?.account, 'sample-personal');
   });
 }
 
@@ -182,7 +356,7 @@ for (const route of [
 ]) {
   test(`keeps the current account on settings and system pages: ${route}`, async t => {
     const h = setup(t, {route, current:'sample-work'}); await h.flush();
-    assert.equal(h.clicks.length, 0);
+    assert.equal(h.switches.length, 0);
     assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
     assert.equal(h.document.querySelector('[data-gas-notice]'), null);
   });
@@ -191,35 +365,35 @@ for (const route of [
 for (const route of ['/sample-team/settings', '/sample-team/repo/settings/actions', '/orgs/sample-team/settings/profile']) {
   test(`organization and repository settings still switch: ${route}`, async t => {
     const h = setup(t, {route}); await h.flush();
-    assert.equal(h.clicks[0]?.account, 'sample-work');
+    assert.equal(h.switches[0]?.account, 'sample-work');
   });
 }
 
 test('leaving a settings page resumes switching', async t => {
   const h = setup(t, {route:'/settings/profile'}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   await h.navigate('/sample-team/repo');
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 test('a system page holds the account chosen for the previous owner page', async t => {
   const h = setup(t, {current:'sample-work'}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   await h.navigate('/notifications');
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
 });
 
 for (const route of ['/enterprises/', '/enterprises/sample-company', '/enterprises/another-company/settings/billing?tab=usage#details', '/ENTERPRISES/sample-company/people']) {
   test(`matches the enterprise prefix and retains the destination: ${route}`, async t => {
     const h = setup(t, {route, values:new Map([['settings', enterpriseConfig]])}); await h.flush();
-    assert.deepEqual(h.clicks, [{account:'sample-work', url:`https://github.com${route}`}]);
+    assert.deepEqual(h.switches, [{account:'sample-work', url:`https://github.com${route}`}]);
   });
 }
 
 for (const route of ['/enterprises', '/enterprises-extra/sample-company', '/another-owner/enterprises/repo', '/another-owner/repo?q=/enterprises/sample-company', '/orgs/enterprises/projects/1', '/enterprises%2F*/repo', '/orgs/enterprises%2F*/projects/1']) {
   test(`the enterprise rule does not match outside its prefix: ${route}`, async t => {
     const h = setup(t, {route, current:'sample-work', values:new Map([['settings', enterpriseConfig]])}); await h.flush();
-    assert.equal(h.clicks[0]?.account, 'sample-personal');
+    assert.equal(h.switches[0]?.account, 'sample-personal');
   });
 }
 
@@ -227,31 +401,31 @@ test('the enterprise prefix rule takes priority over a legacy enterprises owner 
   const h = setup(t, {route:'/enterprises/sample-company', values:new Map([['settings', {
     ...config, rules:[{owner:'enterprises', account:'sample-work-extra'}, ...enterpriseConfig.rules],
   }]])}); await h.flush();
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 test('adding an enterprise rule preserves existing organization rules', async t => {
   const h = setup(t, {values:new Map([['settings', enterpriseConfig]])}); await h.flush();
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 test('client-side navigation into enterprise pages selects the configured account', async t => {
   const h = setup(t, {route:'/', values:new Map([['settings', enterpriseConfig]])}); await h.flush();
   await h.navigate('/enterprises/sample-company/settings');
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 test('leaving enterprise pages returns to the personal account', async t => {
   const h = setup(t, {route:'/enterprises/sample-company', current:'sample-work', values:new Map([['settings', enterpriseConfig]])}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   await h.navigate('/');
-  assert.equal(h.clicks[0]?.account, 'sample-personal');
+  assert.equal(h.switches[0]?.account, 'sample-personal');
 });
 
 for (const route of ['/enterprises/sample-company/sso', '/enterprises/sample-company/saml/consume', '/enterprises/sample-company/oidc?return_to=settings']) {
   test(`an enterprise rule does not interrupt authentication: ${route}`, async t => {
     const h = setup(t, {route, values:new Map([['settings', enterpriseConfig]])}); await h.flush();
-    assert.equal(h.clicks.length, 0);
+    assert.equal(h.switches.length, 0);
     assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
     assert.equal(h.document.querySelector('[data-gas-notice]'), null);
   });
@@ -259,20 +433,20 @@ for (const route of ['/enterprises/sample-company/sso', '/enterprises/sample-com
 
 test('does nothing when already using the target account', async t => {
   const h = setup(t, {current:'sample-work'}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
 });
 
 test('reacts to client-side navigation without requiring a full page load', async t => {
   const h = setup(t, {route:'/'}); await h.flush();
   await h.navigate('/sample-team/repo');
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 test('Navigation API route changes trigger a check without waiting for the interval', async t => {
   const h = setup(t, {route:'/', navigationApi:true}); await h.flush();
   await h.navigateWithoutTick('/sample-team/repo');
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
   assert.equal(h.fetchCalls, 2);
   h.window.navigation.dispatchEvent(new h.window.Event('currententrychange'));
   await h.flush();
@@ -293,58 +467,69 @@ test('a route event cancels old verification and polling checks the new route', 
   await h.navigateWithoutTick('/another-team/repo');
   resolveOld({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'});
   await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   await h.tick();
-  assert.deepEqual(h.clicks.map(click => click.account), ['sample-work-extra']);
+  assert.deepEqual(h.switches.map(click => click.account), ['sample-work-extra']);
   assert.equal(h.fetchCalls, 2);
 });
 
 test('keeps background tabs idle and switches on activation', async t => {
   const h = setup(t, {visible:false, focused:false}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   await h.activate();
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 for (const route of ['/login', '/session', '/sessions/verified-device', '/logout', '/switch_account', '/account/choose', '/settings/two_factor_authentication', '/orgs/sample-team/sso', '/enterprises/sample-company/sso', '/login/oauth/authorize']) {
   test(`does not interrupt authentication: ${route}`, async t => {
     const h = setup(t, {route, current:'sample-work'}); await h.flush();
-    assert.equal(h.clicks.length, 0);
+    assert.equal(h.switches.length, 0);
     assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
   });
 }
 
 test('an unavailable account stops without selecting another account', async t => {
-  const h = setup(t, {accounts:['sample-work-extra']}); await h.settle();
-  assert.equal(h.clicks.length, 0);
+  const h = setup(t, {accounts:['sample-personal', 'sample-work-extra']}); await h.settle();
+  assert.equal(h.switches.length, 0);
+  assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
+  assert.equal(h.values.has('attempt'), false);
+  assert.match(h.document.querySelector('[data-gas-notice]').textContent, /계정을 추가/);
+  await h.tick();
+  assert.equal(h.switches.length, 0);
+});
+
+test('menu fallback stops on an unavailable account without selecting another account', async t => {
+  const h = setup(t, {accounts:['sample-work-extra'], sidePanel:'missing'}); await h.settle();
+  assert.equal(h.switches.length, 0);
   assert.equal(h.document.querySelector('[data-fixture-navigation]'), null);
   assert.deepEqual(h.menuClicks, {profile:2, switcher:1});
   assert.match(h.document.body.textContent, /계정|account/i);
   await h.tick();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
 });
 
-test('an expired account is left for the user to reauthenticate', async t => {
-  const h = setup(t, {expired:'sample-work'}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+test('menu fallback leaves an expired account for the user to reauthenticate', async t => {
+  const h = setup(t, {expired:'sample-work', sidePanel:'missing'}); await h.flush();
+  assert.equal(h.switches.length, 0);
 });
 
 test('a failed switch cannot loop across page reloads', async t => {
   const first = setup(t); await first.flush();
-  assert.equal(first.clicks.length, 1);
+  assert.equal(first.switches.length, 1);
   const second = setup(t, {values:first.values}); await second.flush();
-  assert.equal(second.clicks.length, 0);
+  assert.equal(second.switches.length, 0);
 });
 
 test('failed session verification never starts a switch', async t => {
   const h = setup(t, {fetch:async () => {throw new Error('offline');}}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
+  assert.equal(h.panelCalls, 0);
 });
 
-test('an expired target closes only a menu opened by the script', async t => {
-  const h = setup(t, {expired:'sample-work', preopenProfile:true}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+test('menu fallback closes only a menu opened by the script for an expired target', async t => {
+  const h = setup(t, {expired:'sample-work', preopenProfile:true, sidePanel:'missing'}); await h.flush();
+  assert.equal(h.switches.length, 0);
   assert.ok(h.document.querySelector('[data-fixture-navigation]'));
   assert.deepEqual(h.menuClicks, {profile:1, switcher:1});
 });
@@ -356,12 +541,12 @@ test('navigation during session verification cancels a stale switch', async t =>
   h.window.history.pushState({}, '', '/another-owner');
   resolve({ok:true, url:'https://github.com/', text:async()=>'<meta name="user-login" content="sample-personal">'});
   await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
 });
 
 test('fresh installation stays inactive and provides a local settings form', async t => {
   const h = setup(t, {values:new Map()}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   assert.equal(h.writes.length, 0);
   assert.ok(h.menus.has('GitHub Account Switcher: 설정'));
   h.menus.get('GitHub Account Switcher: 설정')();
@@ -424,7 +609,7 @@ test('enterprise rules can be saved, applied immediately and reopened with exist
   assert.deepEqual(h.values.get('settings'), {...config, rules:[
     ...config.rules, {owner:'ENTERPRISES/*', account:'sample-work'},
   ]});
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
   h.menus.get('GitHub Account Switcher: 설정')();
   assert.equal(h.document.querySelector('[name="rules"]').value, 'sample-team = sample-work\nENTERPRISES/* = sample-work');
 });
@@ -453,42 +638,41 @@ for (const html of ['<textarea>draft</textarea>', '<select><option value="a">A</
     control.dispatchEvent(new h.window.Event('input', {bubbles:true}));
     control.dispatchEvent(new h.window.Event('change', {bubbles:true}));
     await h.navigate('/sample-team/repo#diff-2');
-    assert.equal(h.clicks.length, 0);
+    assert.equal(h.switches.length, 0);
     control.remove();
     await h.tick();
-    assert.equal(h.clicks[0]?.account, 'sample-work');
+    assert.equal(h.switches[0]?.account, 'sample-work');
   });
 }
 
 test('stale account markup reloads before any account click', async t => {
-  const h = setup(t, {current:'sample-personal', session:'sample-other', expectReload:true}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  const h = setup(t, {current:'sample-personal', session:'sample-other'}); await h.flush();
+  assert.equal(h.switches.length, 0);
   assert.deepEqual(h.menuClicks, {profile:0, switcher:0});
-  assert.equal(h.errors.length, 1);
-  assert.match(h.errors[0].message, /navigation/i);
+  assert.equal(h.navigations.length, 1);
   const next = setup(t, {current:'sample-personal', session:'sample-other', values:h.values}); await next.flush();
-  assert.equal(next.clicks.length, 0);
+  assert.equal(next.switches.length, 0);
   assert.match(next.document.querySelector('[data-gas-notice]').textContent, /새로고침/);
 });
 
 test('signed-out sessions do not switch accounts', async t => {
   const h = setup(t, {session:''}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   assert.match(h.document.querySelector('[data-gas-notice]').textContent, /로그인/);
 });
 
 test('disabled configuration stays inactive until explicitly enabled', async t => {
   const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])}); await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   h.menus.get('GitHub Account Switcher: 자동 전환 켜기/끄기')(); await h.flush();
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 for (const exception of ['sample-work', ' SAMPLE-WORK ']) {
   test(`disabled automation switches when the exact exception matches after normalization: ${exception}`, async t => {
     const h = setup(t, {values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:exception}]])});
     await h.flush();
-    assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+    assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
     assert.equal(h.document.querySelector('[data-gas-switch]'), null);
     assert.equal(h.values.get('settings').enabled, false);
   });
@@ -499,7 +683,7 @@ for (const exception of ['sample-work-extra', 'other-work', undefined, '']) {
     const stored = {...config,enabled:false};
     if (exception !== undefined) stored.autoSwitchAccount = exception;
     const h = setup(t, {values:new Map([['settings',stored]])}); await h.flush();
-    assert.equal(h.clicks.length, 0);
+    assert.equal(h.switches.length, 0);
     assert.ok(h.document.querySelector('[data-gas-switch]'));
     assert.equal(h.fetchCalls, 0);
   });
@@ -508,16 +692,16 @@ for (const exception of ['sample-work-extra', 'other-work', undefined, '']) {
 test('global automation remains enabled for any target regardless of exception', async t => {
   const h = setup(t, {route:'/another-owner/repo', current:'sample-work', values:new Map([['settings',{...config,autoSwitchAccount:'sample-work'}]])});
   await h.flush();
-  assert.deepEqual(h.clicks, [{account:'sample-personal', url:'https://github.com/another-owner/repo'}]);
+  assert.deepEqual(h.switches, [{account:'sample-personal', url:'https://github.com/another-owner/repo'}]);
 });
 
 test('exception applies to personal fallback and enterprise rule targets', async t => {
   const personal = setup(t, {route:'/', current:'sample-work', values:new Map([['settings',{...config,enabled:false,autoSwitchAccount:' SAMPLE-PERSONAL '}]])});
   await personal.flush();
-  assert.equal(personal.clicks[0]?.account, 'sample-personal');
+  assert.equal(personal.switches[0]?.account, 'sample-personal');
   const enterprise = setup(t, {route:'/enterprises/sample-company', current:'sample-personal', values:new Map([['settings',{...enterpriseConfig,enabled:false,autoSwitchAccount:'sample-work'}]])});
   await enterprise.flush();
-  assert.equal(enterprise.clicks[0]?.account, 'sample-work');
+  assert.equal(enterprise.switches[0]?.account, 'sample-work');
 });
 
 test('matching exception keeps authentication, system, draft, background, and cooldown guards', async t => {
@@ -531,7 +715,7 @@ test('matching exception keeps authentication, system, draft, background, and co
     if (options.attempt) { delete options.attempt; values.set('attempt',{target:'sample-work',at:Date.now()}); }
     const h = setup(t, {values,...options}); await h.flush();
     if (options.draft) { h.document.querySelector('textarea').dispatchEvent(new h.window.Event('input', {bubbles:true})); await h.tick(); }
-    assert.equal(h.clicks.length, 0);
+    assert.equal(h.switches.length, 0);
     if (options.route || options.focused === false) assert.equal(h.fetchCalls, 0);
   }
 });
@@ -544,7 +728,7 @@ test('changing the exception cancels deferred automatic session verification', a
   h.values.set('settings', {...config,enabled:false,autoSwitchAccount:'other-work'});
   resolveFetch({ok:true,url:'https://github.com/',text:async()=>'<meta name="user-login" content="sample-personal">'});
   await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
 });
 
 test('SPA navigation updates exception mode between manual and automatic switching', async t => {
@@ -554,7 +738,7 @@ test('SPA navigation updates exception mode between manual and automatic switchi
   assert.equal(h.fetchCalls, 0);
   await h.navigate('/sample-team/repo');
   assert.equal(h.document.querySelector('[data-gas-switch]'), null);
-  assert.equal(h.clicks[0]?.account, 'sample-work');
+  assert.equal(h.switches[0]?.account, 'sample-work');
 });
 
 test('disabling global automation preserves the exception and explains it remains active', async t => {
@@ -572,7 +756,7 @@ test('deleting settings removes stored mappings and stops switching', async t =>
   h.document.querySelector('[data-gas-reset]').click();
   assert.equal(h.values.has('settings'), false);
   await h.navigate('/sample-team/repo');
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
 });
 
 
@@ -588,7 +772,7 @@ test('disabled automatic switching offers a manual button without background che
   assert.equal(h.document.querySelectorAll('[data-gas-switch]').length, 1);
   button.click();
   await h.flush();
-  assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
+  assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/pull/42?tab=files#diff-1'}]);
   assert.equal(h.values.get('settings').enabled, false);
 });
 
@@ -608,7 +792,7 @@ test('a retained manual button cannot retarget after SPA navigation', async t =>
   await h.navigate('/another-owner/repo');
   oldButton.click();
   await h.flush();
-  assert.deepEqual(h.clicks, []);
+  assert.deepEqual(h.switches, []);
   assert.equal(h.fetchCalls, 0);
 });
 
@@ -620,17 +804,17 @@ test('a retained manual button cannot run after its exception setting changes', 
   button.click();
   await h.flush();
   assert.equal(h.fetchCalls, 0);
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
 });
 
-test('manual clicks are single flight', async t => {
+test('manual switches are single flight', async t => {
   const h = setup(t, {values:new Map([['settings',{...config,enabled:false}]])});
   await h.flush();
   const button = h.document.querySelector('[data-gas-switch]');
   button.click(); button.click();
   await h.flush();
   assert.equal(h.fetchCalls, 1);
-  assert.equal(h.clicks.length, 1);
+  assert.equal(h.switches.length, 1);
 });
 
 for (const options of [
@@ -685,7 +869,7 @@ test('manual button is restored enabled after an offline failure and can be retr
   button.click();
   await h.flush();
   assert.equal(calls, 2);
-  assert.equal(h.clicks.length, 1);
+  assert.equal(h.switches.length, 1);
   assert.equal(h.values.get('settings').enabled, false);
 });
 
@@ -711,7 +895,7 @@ for (const mutation of ['route', 'settings', 'edit', 'activation']) {
     if (mutation === 'activation') await h.deactivate();
     resolveFetch({ok:true,url:'https://github.com/',text:async()=>'<meta name="user-login" content="sample-personal">'});
     await h.flush();
-    assert.equal(h.clicks.length, 0);
+    assert.equal(h.switches.length, 0);
   });
 }
 
@@ -724,21 +908,21 @@ test('manual switching keeps the recent-attempt cooldown', async t => {
   await h.flush();
   h.document.querySelector('[data-gas-switch]').click();
   await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   assert.match(h.document.querySelector('[data-gas-notice]').textContent, /반복 전환/);
 });
 
 test('manual switching preserves the stale-session reload guard', async t => {
   const h = setup(t, {
     values:new Map([['settings',{...config,enabled:false}]]),
-    current:'sample-personal', session:'sample-other', expectReload:true,
+    current:'sample-personal', session:'sample-other',
   });
   await h.flush();
   h.document.querySelector('[data-gas-switch]').click();
   await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
   assert.equal(h.values.has('refresh'), true);
-  assert.equal(h.errors.length, 1);
+  assert.equal(h.navigations.length, 1);
 });
 
 test('saving, resetting, and toggling settings refreshes the manual button', async t => {
@@ -770,7 +954,7 @@ test('manual verification is cancelled by blur and refocus without visibility ch
   await h.blurRefocus();
   resolveFetch({ok:true,url:'https://github.com/',text:async()=>'<meta name="user-login" content="sample-personal">'});
   await h.flush();
-  assert.equal(h.clicks.length, 0);
+  assert.equal(h.switches.length, 0);
 });
 
 test('manual switch controls share a wrapper and dismiss without side effects until context changes', async t => {
@@ -805,7 +989,7 @@ test('manual switch controls share a wrapper and dismiss without side effects un
   assert.equal(h.document.querySelector('[data-gas-switch]')?.textContent, '@sample-work 계정으로 전환');
   h.document.querySelector('[data-gas-switch]').click();
   await h.flush();
-  assert.deepEqual(h.clicks, [{account:'sample-work', url:'https://github.com/sample-team/repo?view=changed'}]);
+  assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo?view=changed'}]);
   assert.equal(h.values.get('settings').enabled, false);
 });
 
