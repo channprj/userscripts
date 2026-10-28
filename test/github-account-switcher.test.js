@@ -1045,17 +1045,22 @@ test('dismissal resets after ineligible routes, settings changes, and reset', as
 });
 
 const manualSettings = () => new Map([['settings', {...config, enabled:false}]]);
+const COUNTDOWN = 4;
+const secondsLabel = remaining => `${remaining}초`;
+// Labels shown after each elapsed second, ending at "1초" just before the switch.
+const remainingLabels = Array.from({length:COUNTDOWN - 1}, (_, index) => secondsLabel(COUNTDOWN - 1 - index));
+const advance = async (h, seconds) => { for (let i = 0; i < seconds; i++) await h.second(); };
 
-test('the manual button switches after a five-second countdown with a shrinking gauge', async t => {
+test('the manual button switches after a four-second countdown with a shrinking gauge', async t => {
   const h = setup(t, {values:manualSettings()});
   await h.flush();
   const gauge = h.document.querySelector('[data-gas-switch-gauge]');
-  assert.equal(h.countdown(), '5초');
+  assert.equal(h.countdown(), '4초');
   assert.equal(gauge.hidden, false);
   assert.equal(gauge.getAttribute('aria-hidden'), 'true');
   assert.equal(gauge.style.transform, 'scaleX(0)');
-  assert.match(gauge.style.transition, /transform 5000ms linear|transform 5s linear/);
-  for (const remaining of ['4초', '3초', '2초', '1초']) {
+  assert.match(gauge.style.transition, /transform 4000ms linear|transform 4s linear/);
+  for (const remaining of remainingLabels) {
     await h.second();
     assert.equal(h.countdown(), remaining);
     assert.equal(h.fetchCalls, 0);
@@ -1075,7 +1080,7 @@ test('clicking during the countdown switches immediately and stops the countdown
   h.document.querySelector('[data-gas-switch]').click();
   await h.flush();
   assert.equal(h.switches.length, 1);
-  for (let i = 0; i < 5; i++) await h.second();
+  await advance(h, COUNTDOWN + 1);
   assert.equal(h.fetchCalls, 1);
   assert.equal(h.switches.length, 1);
 });
@@ -1085,7 +1090,7 @@ test('dismissing cancels the countdown without switching', async t => {
   await h.flush();
   await h.second();
   h.document.querySelector('[data-gas-switch-dismiss]').click();
-  for (let i = 0; i < 6; i++) await h.second();
+  await advance(h, COUNTDOWN + 1);
   await h.tick();
   assert.equal(h.fetchCalls, 0);
   assert.equal(h.switches.length, 0);
@@ -1095,21 +1100,21 @@ test('dismissing cancels the countdown without switching', async t => {
 test('the countdown stops while the tab is inactive and restarts from a full gauge', async t => {
   const h = setup(t, {values:manualSettings()});
   await h.flush();
-  await h.second(); await h.second();
-  assert.equal(h.countdown(), '3초');
+  await advance(h, 2);
+  assert.equal(h.countdown(), secondsLabel(COUNTDOWN - 2));
   const gauge = h.document.querySelector('[data-gas-switch-gauge]');
   await h.deactivate();
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
-  for (let i = 0; i < 6; i++) await h.second();
+  await advance(h, COUNTDOWN + 1);
   assert.equal(h.fetchCalls, 0);
   const atReflow = [];
   gauge.getBoundingClientRect = () => { atReflow.push([gauge.style.transition, gauge.style.transform, gauge.hidden]); return {}; };
   await h.activate();
-  assert.equal(h.countdown(), '5초');
+  assert.equal(h.countdown(), '4초');
   assert.deepEqual(atReflow, [['none', 'scaleX(1)', false]]);
   assert.equal(gauge.style.transform, 'scaleX(0)');
-  assert.match(gauge.style.transition, /transform 5000ms linear|transform 5s linear/);
-  for (let i = 0; i < 4; i++) await h.second();
+  assert.match(gauge.style.transition, /transform 4000ms linear|transform 4s linear/);
+  await advance(h, COUNTDOWN - 1);
   assert.equal(h.switches.length, 0);
   await h.second();
   assert.equal(h.switches[0]?.account, 'sample-work');
@@ -1123,28 +1128,28 @@ test('a draft stops the countdown until the draft is gone', async t => {
   h.document.querySelector('main').append(control);
   control.dispatchEvent(new h.window.Event('input', {bubbles:true}));
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
-  for (let i = 0; i < 6; i++) await h.second();
+  await advance(h, COUNTDOWN + 1);
   await h.tick();
   assert.equal(h.fetchCalls, 0);
   control.remove();
   await h.tick();
-  assert.equal(h.countdown(), '5초');
-  for (let i = 0; i < 5; i++) await h.second();
+  assert.equal(h.countdown(), '4초');
+  await advance(h, COUNTDOWN);
   assert.equal(h.switches.length, 1);
 });
 
-test('open settings stop the countdown and closing them restarts it from five seconds', async t => {
+test('open settings stop the countdown and closing them restarts it from the beginning', async t => {
   const h = setup(t, {values:manualSettings()});
   await h.flush();
-  await h.second(); await h.second();
+  await advance(h, 2);
   h.menus.get('GitHub Account Switcher: 설정')();
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
-  for (let i = 0; i < 6; i++) await h.second();
+  await advance(h, COUNTDOWN + 1);
   await h.tick();
   assert.equal(h.fetchCalls, 0);
   h.document.querySelector('[data-gas-cancel]').click();
   await h.flush();
-  assert.equal(h.countdown(), '5초');
+  assert.equal(h.countdown(), '4초');
 });
 
 const twoTargetSettings = () => new Map([['settings', {...config, enabled:false, rules:[...config.rules, {owner:'another-team', account:'sample-work-extra'}]}]]);
@@ -1152,12 +1157,12 @@ const twoTargetSettings = () => new Map([['settings', {...config, enabled:false,
 test('a page needing another account restarts the countdown without the old timer', async t => {
   const h = setup(t, {values:twoTargetSettings()});
   await h.flush();
-  await h.second(); await h.second();
-  assert.equal(h.countdown(), '3초');
+  await advance(h, 2);
+  assert.equal(h.countdown(), secondsLabel(COUNTDOWN - 2));
   await h.navigate('/another-team/repo');
   assert.equal(h.document.querySelector('[data-gas-switch-label]').textContent, '@sample-work-extra 계정으로 전환');
-  assert.equal(h.countdown(), '5초');
-  for (const remaining of ['4초', '3초', '2초', '1초']) {
+  assert.equal(h.countdown(), '4초');
+  for (const remaining of remainingLabels) {
     await h.second();
     assert.equal(h.countdown(), remaining);
     assert.equal(h.fetchCalls, 0);
@@ -1169,10 +1174,10 @@ test('a page needing another account restarts the countdown without the old time
 test('pages needing the same account keep the running countdown', async t => {
   const h = setup(t, {values:manualSettings()});
   await h.flush();
-  await h.second(); await h.second();
+  await advance(h, 2);
   await h.navigate('/sample-team/repo/issues#issuecomment-1');
-  assert.equal(h.countdown(), '3초');
-  await h.second(); await h.second();
+  assert.equal(h.countdown(), secondsLabel(COUNTDOWN - 2));
+  await advance(h, COUNTDOWN - 3);
   assert.equal(h.fetchCalls, 0);
   await h.second();
   assert.deepEqual(h.switches, [{account:'sample-work', url:'https://github.com/sample-team/repo/issues#issuecomment-1'}]);
@@ -1181,10 +1186,10 @@ test('pages needing the same account keep the running countdown', async t => {
 test('dismissing a countdown started after navigation cancels it', async t => {
   const h = setup(t, {values:twoTargetSettings()});
   await h.flush();
-  await h.second(); await h.second();
+  await advance(h, 2);
   await h.navigate('/another-team/repo');
   h.document.querySelector('[data-gas-switch-dismiss]').click();
-  for (let i = 0; i < 6; i++) await h.second();
+  await advance(h, COUNTDOWN + 1);
   await h.tick();
   assert.equal(h.fetchCalls, 0);
   assert.deepEqual(h.switches, []);
@@ -1193,14 +1198,14 @@ test('dismissing a countdown started after navigation cancels it', async t => {
 test('a failed countdown switch leaves the button for an explicit retry without counting again', async t => {
   const h = setup(t, {values:manualSettings(), fetch:async () => { throw new Error('offline'); }});
   await h.flush();
-  for (let i = 0; i < 5; i++) await h.second();
+  await advance(h, COUNTDOWN);
   assert.equal(h.fetchCalls, 1);
   assert.match(h.document.querySelector('[data-gas-notice]').textContent, /offline/);
   assert.equal(h.document.querySelector('[data-gas-switch]')?.disabled, false);
   assert.equal(h.countdown(), null);
   assert.equal(h.document.querySelector('[data-gas-switch-gauge]').hidden, true);
   const idle = async () => {
-    for (let i = 0; i < 6; i++) await h.second();
+    await advance(h, COUNTDOWN + 1);
     await h.tick();
   };
   await idle();
@@ -1228,14 +1233,14 @@ test('a failed countdown switch leaves the button for an explicit retry without 
 test('a page needing another account after a failed countdown counts down again', async t => {
   const h = setup(t, {values:twoTargetSettings(), fetch:async () => { throw new Error('offline'); }});
   await h.flush();
-  for (let i = 0; i < 5; i++) await h.second();
+  await advance(h, COUNTDOWN);
   assert.equal(h.fetchCalls, 1);
   await h.navigate('/another-team/repo');
-  assert.equal(h.countdown(), '5초');
+  assert.equal(h.countdown(), '4초');
   await h.second();
   await h.navigate('/sample-team/repo');
-  assert.equal(h.countdown(), '5초');
-  for (let i = 0; i < 4; i++) await h.second();
+  assert.equal(h.countdown(), '4초');
+  await advance(h, COUNTDOWN - 1);
   assert.equal(h.fetchCalls, 1);
   await h.second();
   assert.equal(h.fetchCalls, 2);

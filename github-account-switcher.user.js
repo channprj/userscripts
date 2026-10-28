@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.6.0
+// @version      0.6.1
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -37,7 +37,7 @@
   const SWITCH_PATH = '/switch_account';
   const SESSION_TIMEOUT = 8_000;
   const SWITCH_TIMEOUT = 15_000;
-  const COUNTDOWN_SECONDS = 5;
+  const COUNTDOWN_SECONDS = 4;
   let busy = false;
   let manualButton = null;
   let manualLabel = null;
