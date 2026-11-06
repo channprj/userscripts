@@ -1229,6 +1229,73 @@ test('dismissing cancels the countdown without switching', async t => {
   assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
 });
 
+const press = (h, key, options = {}) => {
+  const event = new h.window.KeyboardEvent('keydown', {
+    key, bubbles: true, cancelable: true,
+    ctrlKey: !!options.ctrlKey, metaKey: !!options.metaKey, altKey: !!options.altKey, shiftKey: !!options.shiftKey,
+  });
+  (options.target ?? h.document.body).dispatchEvent(event);
+  return event;
+};
+
+test('escape during the countdown dismisses it without switching', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second();
+  const event = press(h, 'Escape');
+  assert.equal(event.defaultPrevented, true);
+  await advance(h, COUNTDOWN + 1);
+  await h.tick();
+  assert.deepEqual(h.requests, []);
+  assert.equal(h.switches.length, 0);
+  assert.equal(h.document.querySelector('[data-gas-switch-controls]'), null);
+});
+
+test('enter during the countdown switches immediately and stops the countdown', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  await h.second();
+  press(h, 'Enter');
+  await h.flush();
+  assert.equal(h.switches.length, 1);
+  assert.equal(h.switches[0].account, 'sample-work');
+  await advance(h, COUNTDOWN + 1);
+  assert.equal(h.fetchCalls, 1);
+  assert.equal(h.switches.length, 1);
+});
+
+test('escape and enter leave the countdown alone while typing, in a dialog, or with a modifier', async t => {
+  const h = setup(t, {values:manualSettings()});
+  await h.flush();
+  const field = h.document.createElement('input');
+  const dialog = h.document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  const other = h.document.createElement('button');
+  h.document.body.append(field, dialog, other);
+  press(h, 'Escape', {target: field});
+  press(h, 'Enter', {target: dialog});
+  press(h, 'Enter', {target: other});
+  press(h, 'Enter', {ctrlKey: true});
+  press(h, 'Escape', {metaKey: true});
+  assert.equal(h.countdown(), '4초');
+  assert.equal(h.switches.length, 0);
+  await advance(h, COUNTDOWN);
+  assert.equal(h.switches.length, 1);
+});
+
+test('enter and escape do nothing after a failed countdown stops counting', async t => {
+  const h = setup(t, {values:manualSettings(), fetch: async () => { throw new Error('offline'); }});
+  await h.flush();
+  await advance(h, COUNTDOWN);
+  assert.equal(h.countdown(), null);
+  press(h, 'Enter');
+  press(h, 'Escape');
+  await h.flush();
+  assert.equal(h.switches.length, 0);
+  assert.equal(h.fetchCalls, 2);
+  assert.ok(h.document.querySelector('[data-gas-switch]'));
+});
+
 test('the countdown stops while the tab is inactive and restarts from a full gauge', async t => {
   const h = setup(t, {values:manualSettings()});
   await h.flush();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GitHub Account Switcher
 // @namespace    https://chann.dev
-// @version      0.6.5
+// @version      0.6.6
 // @description  Switch GitHub accounts by organization/user or enterprise paths, with private browser-local settings.
 // @match        https://github.com/*
 // @run-at       document-start
@@ -182,7 +182,7 @@
       <p>한 줄에 <code>organization 또는 user = 전환할 username</code>을 입력하세요. URL 대신 이름만 입력합니다.</p>
       <p><code>/enterprises/</code> 아래 모든 경로에는 <code>enterprises/* = 전환할 username</code>을 사용하세요. SSO 등 인증 화면과 <code>/settings</code> 같은 GitHub 설정·시스템 페이지에서는 전환을 보류하며, 규칙에 없는 경로에서는 개인 계정을 사용합니다.</p>
       <label><input type="checkbox" name="enabled"> 자동 전환 사용</label>
-      <p>끄면 전환이 필요할 때 화면 상단에 버튼이 나타나고 ${COUNTDOWN_SECONDS}초 뒤 전환합니다. 버튼을 누르면 바로 전환하고, ×를 누르면 취소합니다.</p>
+      <p>끄면 전환이 필요할 때 화면 상단에 버튼이 나타나고 ${COUNTDOWN_SECONDS}초 뒤 전환합니다. Enter나 버튼을 누르면 바로 전환하고, Esc나 ×를 누르면 취소합니다.</p>
       <p>설정은 이 브라우저의 userscript 매니저 저장소에만 저장됩니다. 코드나 저장소 파일은 수정하지 않습니다.</p>
       <p role="alert" data-gas-error style="color:#cf222e"></p>
       <button type="submit">저장</button>
@@ -464,6 +464,25 @@
     });
   }
 
+  function dismissManualSwitch() {
+    if (!manualControls?.isConnected || switching) return;
+    dismissedManualContext = observedManualContext;
+    hideManualControls();
+  }
+
+  // Only a running gauge takes Esc and Enter. A field, link, button, or dialog keeps the key.
+  function countdownKey(event) {
+    if (event.repeat || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== 'Escape' && event.key !== 'Enter') return;
+    if (!countdownContext || !manualControls?.isConnected || editing || switching) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target && !target.closest('[data-gas-switch-controls]') && target.closest('input, textarea, select, [contenteditable="true"], a, button, summary, [role="button"], [role="link"], [role="menuitem"], dialog, [role="dialog"], [aria-modal="true"]')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === 'Escape') dismissManualSwitch();
+    else startManualSwitch();
+  }
+
   function stopCountdown() {
     clearTimeout(countdownTimer);
     countdownContext = null;
@@ -482,7 +501,7 @@
     // but never the switch, which ends together with the gauge.
     const deadline = performance.now() + COUNTDOWN_SECONDS * 1_000;
     let shown = 0;
-    manualButton.title = '누르면 바로 전환하고, ×를 누르면 취소합니다.';
+    manualButton.title = 'Enter나 버튼을 누르면 바로 전환하고, Esc나 ×를 누르면 취소합니다.';
     manualGauge.hidden = false;
     manualGauge.style.transition = 'none';
     manualGauge.style.transform = 'scaleX(1)';
@@ -564,11 +583,7 @@
       manualDismiss.title = '계정 전환 버튼 닫기';
       manualDismiss.textContent = '×';
       manualDismiss.style.cssText = 'flex:0 0 40px;min-width:40px;padding:0;border:0;border-left:1px solid #57606a;background:transparent;color:inherit;font:20px/1 system-ui;cursor:pointer';
-      manualDismiss.addEventListener('click', () => {
-        if (!manualControls?.isConnected) return;
-        dismissedManualContext = observedManualContext;
-        hideManualControls();
-      });
+      manualDismiss.addEventListener('click', dismissManualSwitch);
       manualGauge = document.createElement('div');
       manualGauge.dataset.gasSwitchGauge = '';
       manualGauge.setAttribute('aria-hidden', 'true');
@@ -688,7 +703,7 @@
       lastKey = '';
       notice(config.enabled ? '자동 전환을 켰습니다.' : normalized(config.autoSwitchAccount)
         ? `자동 전환을 껐습니다. 예외 계정 @${config.autoSwitchAccount.trim()}이 대상이면 계속 자동 전환하고, 다른 계정은 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환합니다.`
-        : `자동 전환을 껐습니다. 전환이 필요하면 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환하며 ×로 취소할 수 있습니다.`);
+        : `자동 전환을 껐습니다. 전환이 필요하면 상단 버튼이 ${COUNTDOWN_SECONDS}초 뒤 전환하며, Esc나 ×로 취소하고 Enter로 바로 전환할 수 있습니다.`);
       void check();
     });
 
@@ -703,6 +718,7 @@
     };
     document.addEventListener('input', markEdited, true);
     document.addEventListener('change', markEdited, true);
+    document.addEventListener('keydown', countdownKey, true);
     const activate = () => {
       const nowActive = active();
       if (nowActive && !wasActive) activation++;
