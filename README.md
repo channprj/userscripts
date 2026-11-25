@@ -17,7 +17,7 @@
 | ----------------------- | ---------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
-| X Shortcut Extension    | X(구 Twitter)에서 한글 줄바꿈 개선과 Esc 단축키 동작을 추가합니다.   | 0.1  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-extension.user.js)             |
+| X Enhancer              | X(구 Twitter) 게시물 전문을 버튼이나 `C` 키 한 번으로 복사하고, `Esc`로 뒤로 가며, 한글 줄바꿈을 다듬습니다. 이전 X Shortcut Extension을 대체합니다. | 0.3  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-enhancer.user.js)              |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 | GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 메뉴를 열지 않고 계정을 바로 또는 4초 카운트다운 뒤 전환합니다. 카운트다운 중 Esc는 취소하고 Enter는 바로 전환합니다. 다른 탭에서 계정이 바뀐 탭도 직접 새로고침하지 않아도 맞춥니다. | 0.6.6 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
@@ -85,14 +85,29 @@ Google 검색 결과와 이미지·동영상·Short videos·뉴스·쇼핑 탭�
 
 ---
 
-### X Shortcut Extension
+### X Enhancer
 
-`[x-extension.user.js](./x-extension.user.js)`
+`[x-enhancer.user.js](./x-enhancer.user.js)`
 
-X(구 Twitter)의 한글 표시와 키보드 동작을 다듬습니다.
+X(구 Twitter)에서 게시물 복사와 한글 표시, 키보드 동작을 다듬습니다. 이전 `x-extension.user.js`(X Shortcut Extension)의 기능을 모두 포함하므로, 설치했다면 그 스크립트는 지워도 됩니다.
 
-- 한국어(`lang=ko`) 트윗에 `word-break: keep-all`을 적용해 어색한 줄바꿈을 줄입니다.
-- `Esc` 키로 열려 있는 팝업 메뉴 / 닫기 버튼 / 뒤로 가기 버튼을 순서대로 처리합니다.
+| 입력 | 동작 |
+| --- | --- |
+| 복사 버튼 클릭 / `C` | 게시물 전문 복사 |
+| `Shift` + 클릭 / `Shift + C` | 전문 끝에 작성자와 게시물 링크를 붙여 복사 |
+| `Esc` | 열린 메뉴·창이 없으면 뒤로 가기, 입력창에 있으면 입력창에서 빠져나오기 |
+
+- 게시물 아래 아이콘 줄(답글 · 재게시 · 마음에 들어요 · 조회수 · 북마크 · 공유)의 맨 오른쪽 끝에 **복사 버튼**(네모 두 개가 겹친 아이콘)이 붙습니다.
+  - `C`는 `j` / `k`로 고른 게시물을, 고른 게시물이 없으면 지금 보고 있는 게시물 페이지의 게시물을 복사합니다. 한글 입력 상태에서도 동작합니다.
+  - 입력창에 있을 때, 한글을 조합하는 중일 때, 메뉴나 창이 열려 있을 때, X의 `g` `c`(크리에이터 스튜디오) 단축키를 누를 때는 동작하지 않습니다.
+  - 긴 게시물은 `더 보기`를 누르지 않아도 전문을 복사합니다.
+  - `t.co` 단축 링크는 원래 URL로 풀고, 답글 앞의 `@멘션`과 끝의 미디어 링크는 뺍니다.
+  - X가 Grok 번역을 보여주고 있으면 번역문 전체를, 원문을 보여주고 있으면 원문을 복사합니다.
+  - 복사되면 아이콘이 잠시 체크 표시로, 실패하면 X 표시로 바뀝니다.
+- `Esc`
+  - 메뉴, 사진 뷰어, 작성 창처럼 X가 `Esc`로 직접 닫는 것이 열려 있으면 X에 맡깁니다. 창을 닫은 `Esc`가 뒤로 가기까지 하지 않습니다.
+  - 뒤로 가기 버튼을 화면 언어와 상관없이 찾으므로 한국어 화면에서도 동작합니다.
+- 한국어(`lang=ko`) 게시물에 `word-break: keep-all`을 적용해 어색한 줄바꿈을 줄입니다. X가 한국어로 번역해 보여주는 게시물에도 적용됩니다.
 - Match: `https://x.com/*`
 
 ---
