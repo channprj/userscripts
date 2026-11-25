@@ -9,7 +9,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'x-enhancer.user.js'),
 // Sanitized fixture of X's post markup: the action bar and the React fiber
 // whose props carry the post's API object.
 function setup(t, posts, { url = 'https://x.com/home', extra = '' } = {}) {
-  const articles = posts.map(({ shown }) => `<article data-testid="tweet">
+  const articles = posts.map(({ shown }) => `<article data-testid="tweet" tabindex="0">
       <div data-testid="tweetText" lang="en"><span>${shown}</span></div>
       <div role="group"><div><button data-testid="reply"></button></div><div><button data-testid="like"></button></div></div>
     </article>`);
@@ -97,6 +97,44 @@ test('adds one button per post, including posts rendered later', async t => {
   // The clone has no React fiber, so its copy falls back to the visible text.
   await h.click(1);
   assert.deepEqual(h.copied, ['one']);
+});
+
+test('C copies the post picked with j/k, also with the Korean IME on; Shift+C adds the source', async t => {
+  const h = setup(t, [post('1', 'first'), post('2', 'second')]);
+  h.window.document.querySelectorAll('article')[1].focus();
+  await h.press('KeyC', 'c');
+  await h.press('KeyC', 'ㅊ');
+  await h.press('KeyC', 'C', { shiftKey: true });
+  assert.deepEqual(h.copied, ['second', 'second', 'second\n\n— Sample User (@sample) https://x.com/sample/status/2']);
+  assert.equal(h.window.document.querySelectorAll('[data-x-enhancer-copy]')[1].dataset.state, 'done');
+});
+
+test('Shift-click on the button adds the source too', async t => {
+  const h = setup(t, [post('7', 'hello')]);
+  h.window.document.querySelector('[data-x-enhancer-copy]').dispatchEvent(new h.window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+  await new Promise(resolve => h.window.setTimeout(resolve, 0));
+  assert.deepEqual(h.copied, ['hello\n\n— Sample User (@sample) https://x.com/sample/status/7']);
+});
+
+test('C on a post page copies that post when nothing is focused', async t => {
+  const h = setup(t, [post('1', 'parent'), post('2', 'focal'), post('3', 'reply')], { url: 'https://x.com/sample/status/2' });
+  await h.press('KeyC', 'c');
+  assert.deepEqual(h.copied, ['focal']);
+});
+
+test('C is left alone while typing, composing, in a menu, or after g', async t => {
+  const h = setup(t, [post('1', 'first')], { extra: '<textarea></textarea><div role="menu" hidden></div>' });
+  const { document } = h.window;
+  document.querySelector('article').focus();
+  await h.press('KeyC', 'c', { isComposing: true });
+  await h.press('KeyG', 'g');
+  await h.press('KeyC', 'c');
+  document.querySelector('[role=menu]').hidden = false;
+  await h.press('KeyC', 'c');
+  document.querySelector('[role=menu]').hidden = true;
+  document.querySelector('textarea').focus();
+  await h.press('KeyC', 'c');
+  assert.deepEqual(h.copied, []);
 });
 
 test('Esc goes back only when no layer is open, and leaves text fields first', async t => {

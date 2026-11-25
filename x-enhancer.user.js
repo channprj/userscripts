@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         X Enhancer
 // @namespace    https://github.com/channprj/userscripts
-// @version      0.2
+// @version      0.3
 // @icon         https://user-images.githubusercontent.com/1831308/99884645-3101e100-2c73-11eb-9258-958dee09457e.png
-// @description  X(formerly Twitter): copy a post's full text in one click, Esc to go back, Korean line breaks.
+// @description  X(formerly Twitter): copy a post's full text with one click or the C key, Esc to go back, Korean line breaks.
 // @author       CHANN <chann@chann.dev>
 // @match        https://x.com/*
 // @downloadURL  https://raw.githubusercontent.com/channprj/userscripts/main/x-enhancer.user.js
@@ -22,10 +22,12 @@
     done: 'M9.64 18.95l-5.55-4.86 1.32-1.5 3.95 3.46 8.46-10.95 1.58 1.22L9.64 18.95z',
     fail: 'M13.41 12l5.8-5.79-1.42-1.42L12 10.59 6.21 4.79 4.79 6.21 10.59 12l-5.8 5.79 1.42 1.42L12 13.41l5.79 5.8 1.42-1.42L13.41 12z',
   };
-  const LABELS = { copy: '전문 복사', done: '복사됨', fail: '복사 실패' };
+  const LABELS = { copy: '전문 복사 (C) · Shift: 출처 포함', done: '복사됨', fail: '복사 실패' };
   const POST = 'article[data-testid="tweet"]';
   // Layers X closes itself on Esc: menus, dialogs, the photo viewer, search suggestions.
   const OPEN_LAYER = '[role="menu"], [role="dialog"], [aria-modal="true"], [role="listbox"]';
+  // X's own two-key shortcuts start with g (g c opens Creator Studio).
+  const SEQUENCE_MS = 1500;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -143,11 +145,25 @@
     button.querySelector('path').setAttribute('d', ICONS[state]);
   };
 
-  const copyPost = async (button) => {
+  const permalink = (article, data) => {
+    const tweet = data && (data.retweeted_status || data);
+    if (tweet?.user?.screen_name && tweet.id_str) return `https://x.com/${tweet.user.screen_name}/status/${tweet.id_str}`;
+    return article.querySelector('a[href*="/status/"] time')?.closest('a')?.href || '';
+  };
+
+  const sourceLine = (article, data) => {
+    const user = (data?.retweeted_status || data)?.user;
+    const author = user?.screen_name ? `${user.name} (@${user.screen_name})` : '';
+    return [author, permalink(article, data)].filter(Boolean).join(' ');
+  };
+
+  const copyPost = async (button, withSource = false) => {
     const article = button.closest('article');
     const shown = article ? domText(article) : '';
     const data = article && tweetData(article);
-    const text = data ? postText(data, shown) : shown;
+    let text = data ? postText(data, shown) : shown;
+    const source = text && withSource ? sourceLine(article, data) : '';
+    if (source) text += `\n\n— ${source}`;
     clearTimeout(button.resetTimer);
     try {
       if (!text) throw new Error('no text');
@@ -170,7 +186,7 @@
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      copyPost(button);
+      copyPost(button, event.shiftKey);
     });
     bar.appendChild(wrap);
   };
@@ -191,16 +207,40 @@
   const isShown = (el) => el.getClientRects().length > 0;
   const hasOpenLayer = () => Array.from(document.querySelectorAll(OPEN_LAYER)).some(isShown);
 
+  // The post picked with j/k, or the post a /status/ page is about.
+  const currentPost = () => {
+    const focused = document.activeElement?.closest?.(POST);
+    if (focused) return focused;
+    const id = location.pathname.match(/\/status\/(\d+)/)?.[1];
+    return id ? Array.from(document.querySelectorAll(POST)).find((article) => tweetData(article)?.id_str === id) : null;
+  };
+
+  let lastG = -Infinity;
   // Capture phase: decide before X's handlers run, so an Esc that closes a
-  // layer is left to X alone.
+  // layer, or a C that finishes X's g-sequence, is left to X alone.
   window.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.repeat) return;
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || hasOpenLayer()) return;
+    if (event.isComposing || event.keyCode === 229 || event.repeat) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const sinceG = event.timeStamp - lastG;
+    if (event.code === 'KeyG') lastG = event.timeStamp;
     const active = document.activeElement;
-    if (isEditable(active)) {
-      active.blur();
+
+    if (event.key === 'Escape') {
+      if (event.shiftKey || hasOpenLayer()) return;
+      if (isEditable(active)) {
+        active.blur();
+        return;
+      }
+      Array.from(document.querySelectorAll('[data-testid="app-bar-back"]')).find(isShown)?.click();
       return;
     }
-    Array.from(document.querySelectorAll('[data-testid="app-bar-back"]')).find(isShown)?.click();
+
+    // event.code keeps C working while the Korean IME is on (it would type ㅊ).
+    if (event.code === 'KeyC' && sinceG > SEQUENCE_MS && !isEditable(active) && !hasOpenLayer()) {
+      const button = currentPost()?.querySelector(`[${COPY_ATTR}]`);
+      if (!button) return;
+      event.preventDefault();
+      copyPost(button, event.shiftKey);
+    }
   }, true);
 })();
