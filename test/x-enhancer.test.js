@@ -8,15 +8,17 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'x-enhancer.user.js'),
 
 // Sanitized fixture of X's post markup: the action bar and the React fiber
 // whose props carry the post's API object.
-function setup(t, posts) {
+function setup(t, posts, { url = 'https://x.com/home', extra = '' } = {}) {
   const articles = posts.map(({ shown }) => `<article data-testid="tweet">
       <div data-testid="tweetText" lang="en"><span>${shown}</span></div>
       <div role="group"><div><button data-testid="reply"></button></div><div><button data-testid="like"></button></div></div>
     </article>`);
-  const dom = new JSDOM(`<!doctype html><head></head><body>${articles.join('')}</body>`, {
-    url: 'https://x.com/home', runScripts: 'outside-only', pretendToBeVisual: true,
+  const dom = new JSDOM(`<!doctype html><head></head><body>${extra}${articles.join('')}</body>`, {
+    url, runScripts: 'outside-only', pretendToBeVisual: true,
   });
   const { window } = dom;
+  // jsdom has no layout; treat everything outside [hidden] as on screen.
+  window.Element.prototype.getClientRects = function () { return this.closest('[hidden]') ? [] : [{}]; };
   t.after(() => {
     // Stop the pending icon reset. close() empties the document, which wakes the
     // script's observer, and jsdom throws on a frame requested after close.
@@ -38,8 +40,16 @@ function setup(t, posts) {
     await new Promise(resolve => window.setTimeout(resolve, 0));
     return button;
   };
-  return { window, copied, click };
+  const press = async (code, key, init = {}) => {
+    const target = window.document.activeElement || window.document.body;
+    target.dispatchEvent(new window.KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true, ...init }));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  };
+  return { window, copied, click, press };
 }
+
+const post = (id, text, user = { name: 'Sample User', screen_name: 'sample' }) =>
+  ({ shown: text, tweet: { id_str: id, full_text: text, display_text_range: [0, text.length], user } });
 
 test('copies the full long post, not the truncated text shown', async t => {
   const full = 'First line.\n\nSecond paragraph that X hides behind Show more & keeps going.';
@@ -87,4 +97,27 @@ test('adds one button per post, including posts rendered later', async t => {
   // The clone has no React fiber, so its copy falls back to the visible text.
   await h.click(1);
   assert.deepEqual(h.copied, ['one']);
+});
+
+test('Esc goes back only when no layer is open, and leaves text fields first', async t => {
+  const h = setup(t, [post('1', 'first')], {
+    url: 'https://x.com/sample/status/1',
+    extra: '<button data-testid="app-bar-back" hidden></button><button data-testid="app-bar-back"></button><input><div role="dialog" hidden></div>',
+  });
+  const { document } = h.window;
+  let backs = 0;
+  document.querySelectorAll('[data-testid=app-bar-back]')[1].addEventListener('click', () => backs++);
+  document.querySelectorAll('[data-testid=app-bar-back]')[0].addEventListener('click', () => { throw new Error('hidden back button clicked'); });
+  const dialog = document.querySelector('[role=dialog]');
+  dialog.hidden = false;
+  await h.press('Escape', 'Escape');
+  assert.equal(backs, 0, 'X closes the dialog itself');
+  dialog.hidden = true;
+  const input = document.querySelector('input');
+  input.focus();
+  await h.press('Escape', 'Escape');
+  assert.equal(backs, 0);
+  assert.notEqual(document.activeElement, input);
+  await h.press('Escape', 'Escape');
+  assert.equal(backs, 1);
 });

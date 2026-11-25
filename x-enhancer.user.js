@@ -3,7 +3,7 @@
 // @namespace    https://github.com/channprj/userscripts
 // @version      0.2
 // @icon         https://user-images.githubusercontent.com/1831308/99884645-3101e100-2c73-11eb-9258-958dee09457e.png
-// @description  X(formerly Twitter): copy a post's full text in one click, Korean line breaks, Esc shortcuts.
+// @description  X(formerly Twitter): copy a post's full text in one click, Esc to go back, Korean line breaks.
 // @author       CHANN <chann@chann.dev>
 // @match        https://x.com/*
 // @downloadURL  https://raw.githubusercontent.com/channprj/userscripts/main/x-enhancer.user.js
@@ -23,6 +23,9 @@
     fail: 'M13.41 12l5.8-5.79-1.42-1.42L12 10.59 6.21 4.79 4.79 6.21 10.59 12l-5.8 5.79 1.42 1.42L12 13.41l5.79 5.8 1.42-1.42L13.41 12z',
   };
   const LABELS = { copy: '전문 복사', done: '복사됨', fail: '복사 실패' };
+  const POST = 'article[data-testid="tweet"]';
+  // Layers X closes itself on Esc: menus, dialogs, the photo viewer, search suggestions.
+  const OPEN_LAYER = '[role="menu"], [role="dialog"], [aria-modal="true"], [role="listbox"]';
 
   const style = document.createElement('style');
   style.textContent = `
@@ -175,7 +178,7 @@
   let queued = false;
   const scan = () => {
     queued = false;
-    document.querySelectorAll('article[data-testid="tweet"]').forEach(addCopyButton);
+    document.querySelectorAll(POST).forEach(addCopyButton);
   };
   new MutationObserver(() => {
     if (queued) return;
@@ -184,13 +187,20 @@
   }).observe(document.body, { childList: true, subtree: true });
   scan();
 
-  window.addEventListener('keyup', (event) => {
-    if (event.code !== 'Escape') return;
-    const popupMenu = document.querySelector('[role=menu]');
-    const closeBtn = document.querySelector('[aria-label=Close]');
-    const backBtn = document.querySelector('[aria-label=Back]');
-    if (popupMenu) popupMenu.remove();
-    else if (closeBtn) closeBtn.click();
-    else if (backBtn) backBtn.click();
-  });
+  const isEditable = (el) => !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  const isShown = (el) => el.getClientRects().length > 0;
+  const hasOpenLayer = () => Array.from(document.querySelectorAll(OPEN_LAYER)).some(isShown);
+
+  // Capture phase: decide before X's handlers run, so an Esc that closes a
+  // layer is left to X alone.
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.repeat) return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || hasOpenLayer()) return;
+    const active = document.activeElement;
+    if (isEditable(active)) {
+      active.blur();
+      return;
+    }
+    Array.from(document.querySelectorAll('[data-testid="app-bar-back"]')).find(isShown)?.click();
+  }, true);
 })();
