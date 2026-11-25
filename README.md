@@ -17,7 +17,7 @@
 | ----------------------- | ---------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
 | Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
-| X Enhancer              | X(구 Twitter) 게시물 전문을 버튼이나 `C` 키 한 번으로 복사하고, `Esc`로 뒤로 가며, 한글 줄바꿈을 다듬습니다. 이전 X Shortcut Extension을 대체합니다. | 0.3  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-enhancer.user.js)              |
+| X Enhancer              | X(구 Twitter) 게시물 전문을 버튼이나 `C` 키 한 번으로 복사하고, 사진·동영상을 원본 화질로 하나씩 또는 한 번에 받고, 사진 원본을 클립보드로 복사합니다. `Esc`로 뒤로 가며 한글 줄바꿈도 다듬습니다. 이전 X Shortcut Extension을 대체합니다. | 0.4  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-enhancer.user.js)              |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 | GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 메뉴를 열지 않고 계정을 바로 또는 4초 카운트다운 뒤 전환합니다. 카운트다운 중 Esc는 취소하고 Enter는 바로 전환합니다. 다른 탭에서 계정이 바뀐 탭도 직접 새로고침하지 않아도 맞춥니다. | 0.6.6 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
 
@@ -95,6 +95,9 @@ X(구 Twitter)에서 게시물 복사와 한글 표시, 키보드 동작을 다�
 | --- | --- |
 | 복사 버튼 클릭 / `C` | 게시물 전문 복사 |
 | `Shift` + 클릭 / `Shift + C` | 전문 끝에 작성자와 게시물 링크를 붙여 복사 |
+| 아이콘 줄의 전체 다운로드 버튼 | 게시물의 사진·동영상을 모두 원본 화질로 다운로드 |
+| 사진·동영상 위의 다운로드 버튼 | 그 사진이나 동영상 하나를 원본 화질로 다운로드 |
+| 사진 위의 복사 버튼 | 사진 원본을 클립보드에 이미지로 복사 |
 | `Esc` | 열린 메뉴·창이 없으면 뒤로 가기, 입력창에 있으면 입력창에서 빠져나오기 |
 
 - 게시물 아래 아이콘 줄(답글 · 재게시 · 마음에 들어요 · 조회수 · 북마크 · 공유)의 맨 오른쪽 끝에 **복사 버튼**(네모 두 개가 겹친 아이콘)이 붙습니다.
@@ -104,6 +107,13 @@ X(구 Twitter)에서 게시물 복사와 한글 표시, 키보드 동작을 다�
   - `t.co` 단축 링크는 원래 URL로 풀고, 답글 앞의 `@멘션`과 끝의 미디어 링크는 뺍니다.
   - X가 Grok 번역을 보여주고 있으면 번역문 전체를, 원문을 보여주고 있으면 원문을 복사합니다.
   - 복사되면 아이콘이 잠시 체크 표시로, 실패하면 X 표시로 바뀝니다.
+- 사진·동영상
+  - 사진이나 동영상 위에 마우스를 올리면 왼쪽 위에 **다운로드** 버튼과, 사진이면 **복사** 버튼이 나타납니다. 사진을 크게 보는 화면에서는 오른쪽 아래에 나타납니다.
+  - 사진이나 동영상이 있는 게시물은 아이콘 줄 맨 오른쪽, 복사 버튼 옆에 **전체 다운로드** 버튼(줄 두 개 위의 아래 화살표)이 붙습니다. 사진과 동영상이 여러 개면 모두 차례로 받습니다.
+  - 사진은 업로드된 원본(`name=orig`)을, 동영상과 GIF는 가장 높은 화질의 MP4를 받습니다.
+  - 파일 이름은 `작성자아이디_게시물ID_순번.확장자`입니다. 인용된 게시물의 사진은 인용된 게시물 기준으로 이름을 붙입니다.
+  - 사진 복사는 원본을 PNG로 바꿔 클립보드에 넣습니다. 브라우저 클립보드는 이미지를 PNG로만 받기 때문입니다.
+  - 여러 파일을 한 번에 받을 때 브라우저가 "여러 파일 다운로드" 허용을 처음 한 번 물어볼 수 있습니다.
 - `Esc`
   - 메뉴, 사진 뷰어, 작성 창처럼 X가 `Esc`로 직접 닫는 것이 열려 있으면 X에 맡깁니다. 창을 닫은 `Esc`가 뒤로 가기까지 하지 않습니다.
   - 뒤로 가기 버튼을 화면 언어와 상관없이 찾으므로 한국어 화면에서도 동작합니다.
