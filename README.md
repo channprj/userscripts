@@ -16,7 +16,7 @@
 | 이름                      | 설명                                             | 버전   | Install                                                                                                |
 | ----------------------- | ---------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
 | Confluence Enhancer     | Confluence 우측 Rovo 버튼과 호버 시 뜨는 넛지를 숨깁니다. | 2    | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/confluence-enhancer.user.js)     |
-| Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.20 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
+| Google Search Navigator | Google 검색 결과와 이미지·동영상·뉴스·쇼핑 탭을 Vim 스타일 단축키로 탐색합니다.   | 0.21 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/google-search-navigator.user.js) |
 | X Enhancer              | X(구 Twitter) 게시물 전문을 버튼이나 `C` 키 한 번으로 복사하고, `Esc`로 뒤로 가며, 한글 줄바꿈을 다듬습니다. 이전 X Shortcut Extension을 대체합니다. | 0.3  | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/x-enhancer.user.js)              |
 | iCloud Photos Copy Shortcut | iCloud Photos 상세 화면 또는 그리드의 선택된 사진을 `Cmd/Ctrl+C` 로 클립보드에 복사합니다. | 0.2 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/icloud-photos-copy.user.js) |
 | GitHub Account Switcher | Organization/user 또는 Enterprise 경로에 맞춰 메뉴를 열지 않고 계정을 바로 또는 4초 카운트다운 뒤 전환합니다. 카운트다운 중 Esc는 취소하고 Enter는 바로 전환합니다. 다른 탭에서 계정이 바뀐 탭도 직접 새로고침하지 않아도 맞춥니다. | 0.6.6 | [Install](https://raw.githubusercontent.com/channprj/userscripts/main/github-account-switcher.user.js) |
